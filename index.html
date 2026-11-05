@@ -93,6 +93,10 @@ body{background:var(--bg);color:var(--ink);font:14px var(--f-ui);overflow:hidden
 .btn{flex:1 1 9rem;min-height:46px;border-radius:12px;border:1px solid var(--line);background:transparent;color:var(--ink);font:600 .95rem/1 var(--f-ui);cursor:pointer}
 .btn.primary{background:var(--mood);border-color:transparent;color:#0a0d12}
 .fine{font-size:.76rem!important}
+.notice{display:grid;gap:6px;padding:12px;border-radius:12px;border:1px solid #ff8a7a;background:rgba(255,138,122,.08);font-size:.86rem;line-height:1.45;color:var(--ink)}
+.notice span{color:var(--ink-dim)}
+.notice summary{cursor:pointer;color:var(--ink-dim);font-size:.8rem}
+.notice pre{margin:6px 0 0;max-height:9rem;overflow:auto;font:400 .66rem/1.5 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:var(--ink-dim);white-space:pre-wrap;word-break:break-word;-webkit-user-select:text;user-select:text}
 
 /* Insights panel: learned taste, live face signals, decision log */
 .insights{pointer-events:auto;position:fixed;top:calc(96px + env(safe-area-inset-top, 0px));right:max(16px, env(safe-area-inset-right, 0px));width:min(26rem, calc(100vw - 32px));max-height:min(62vh, 34rem);overflow:auto;padding:14px;border-radius:14px;border:1px solid var(--line);background:rgba(6,8,13,.88);display:grid;gap:12px}
@@ -178,12 +182,21 @@ body{background:var(--bg);color:var(--ink);font:14px var(--f-ui);overflow:hidden
 
 <div class="intro" id="intro">
   <div class="card" role="dialog" aria-labelledby="introTitle">
+    <div class="notice" id="crashNote" hidden role="status">
+      <b>Last time, Moodscape stopped while <span id="crashStage"></span>.</b>
+      <span id="crashHint"></span>
+      <details><summary>Steps from that session</summary><pre id="crashLog"></pre></details>
+    </div>
     <div class="eyebrow">A landscape that reads your face</div>
     <h1 id="introTitle">Moodscape</h1>
     <p>Your front camera reads your smile, brows, eyes and mouth. A small image model on your phone paints a new landscape to match how you look.</p>
     <label class="toggle" for="useAI">
       <input type="checkbox" id="useAI" checked>
       <div><b>Paint with the on-device model</b><span id="aiNote">SDXS, a one-step image model. It downloads once (635 MB, use Wi-Fi), then stays on this phone. Needs a browser with WebGPU.</span></div>
+    </label>
+    <label class="toggle" for="lowMem">
+      <input type="checkbox" id="lowMem">
+      <div><b>Low-memory mode</b><span>Loads the painter before face tracking, keeps face tracking off the GPU, and skips model optimisation. Paintings take longer, but it's less likely to crash.</span></div>
     </label>
     <p>It also learns from you. For a couple of seconds after each new painting it watches how your face reacts, then drifts toward the styles and layouts you respond to. Your taste profile stays on this phone.</p>
     <p class="fine">Smile for a golden meadow. Widen your eyes for an aurora. Scowl for a volcanic storm. Frown for rain. Close your eyes for a few seconds to bring night. Face tracking and painting both run on your phone; no video or images leave it.</p>
@@ -289,16 +302,30 @@ let stars = [], clouds = [], P = [];
 const spawnAcc = { rain: 0, ember: 0, petal: 0, fly: 0, spark: 0 };
 let flash = 0, bolt = null, time = 0;
 const log = [];
+/* Crash journal: the current step is written to storage as it happens. If the tab is killed (out of
+   memory, GPU fault), nothing else runs, so on the next launch the journal shows where it stopped. */
+const JOURNAL_KEY = "moodscape-journal-v1";
+const journal = { stage: "opened the app", at: Date.now(), clean: false, ok: false };
+let prevJournal = null;
+try { prevJournal = JSON.parse(localStorage.getItem(JOURNAL_KEY) || "null"); } catch {}
+function saveJournal() {
+  try { localStorage.setItem(JOURNAL_KEY, JSON.stringify({ ...journal, log: log.slice(0, 25) })); } catch {}
+}
+function stage(name) { journal.stage = name; journal.at = Date.now(); logLine(`step: ${name}`); }
+function markClean(clean) { journal.clean = clean; saveJournal(); }
+addEventListener("pagehide", () => markClean(true));
+document.addEventListener("visibilitychange", () => markClean(document.visibilityState === "hidden"));
 function logLine(s) {
   const t = new Date().toTimeString().slice(0, 8);
-  log.unshift(`${t} ${s}`); if (log.length > 12) log.pop();
+  log.unshift(`${t} ${s}`); if (log.length > 25) log.pop();
   console.log("[moodscape]", s);
+  saveJournal();
 }
 
 /* ---------- Layout ---------- */
 function resize() {
   W = innerWidth; H = innerHeight;
-  dpr = Math.min(devicePixelRatio || 1, W < 700 ? 1.5 : 2);
+  dpr = window.__lowMem ? 1 : Math.min(devicePixelRatio || 1, W < 700 ? 1.5 : 2); // smaller canvas in low-memory mode
   canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   stars = Array.from({ length: 170 }, () => ({ x: Math.random() * W, y: Math.random() * H * 0.6, r: rand(0.4, 1.4), tw: rand(0, 6.28) }));
@@ -339,6 +366,7 @@ const video = $("#video");
 async function startCamera() {
   hideIntro();
   setStatus("Starting camera…");
+  stage("camera: asking for access");
   if (!navigator.mediaDevices?.getUserMedia) return fallback("Camera needs a secure page. Open this from an https:// address.");
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
@@ -347,14 +375,21 @@ async function startCamera() {
   try { await video.play(); } catch {}
   $("#camOff").hidden = true;
   if (!landmarker) {
+    if (lowMem && ai.loading) { // one heavy GPU job at a time on low-memory phones
+      setStatus("Waiting for the painter to finish loading before starting face tracking…");
+      await ai.loading;
+    }
     setStatus("Loading face tracker…");
+    stage("camera: loading face tracker");
     try {
       const vision = await import(`${CONFIG.vision}/vision_bundle.mjs`);
       const fileset = await vision.FilesetResolver.forVisionTasks(`${CONFIG.vision}/wasm`);
       const make = (delegate) => vision.FaceLandmarker.createFromOptions(fileset, {
         baseOptions: { modelAssetPath: CONFIG.faceModel, delegate }, outputFaceBlendshapes: true, runningMode: "VIDEO", numFaces: 1,
       });
-      try { landmarker = await make("GPU"); } catch { landmarker = await make("CPU"); logLine("face tracker on CPU (GPU delegate failed)"); }
+      if (lowMem) { landmarker = await make("CPU"); logLine("face tracker on CPU (low-memory mode)"); }
+      else try { landmarker = await make("GPU"); } catch { landmarker = await make("CPU"); logLine("face tracker on CPU (GPU delegate failed)"); }
+      stage("camera: tracking your face");
     } catch (e) {
       stopCamera();
       return fallback("Couldn't load the face tracker. Check your connection, then tap Camera.");
@@ -528,11 +563,16 @@ async function downloadToMemory(url, spec, onBytes) {
   return got === buf.length ? buf : buf.slice(0, got);
 }
 
-async function startAI() {
-  if (ai.enabled) return;
+function startAI() {
+  if (ai.enabled) return ai.loading;
   ai.enabled = true;
+  ai.loading = loadAI().finally(() => { ai.loading = null; });
+  return ai.loading;
+}
+async function loadAI() {
   try {
     aiState("busy", "Checking WebGPU…");
+    stage("painter: checking the GPU");
     if (!navigator.gpu) throw new Error("This browser doesn't have WebGPU. Use Chrome on Android or Safari on iOS 26.");
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) throw new Error("WebGPU is turned off or not supported on this GPU.");
@@ -551,28 +591,39 @@ async function startAI() {
     try { await navigator.storage?.persist?.(); } catch {}
 
     aiState("busy", "Loading AI runtime…");
+    stage("painter: loading the AI runtime");
     await loadScript(AI.ort + "ort.webgpu.min.js");
     const ort = window.ort;
     ort.env.wasm.wasmPaths = AI.ort;
+    ort.env.wasm.numThreads = 1;
     ort.env.logLevel = "error";
 
     const totalBytes = AI.files.reduce((s, f) => s + f.size, 0);
     const done = {};
+    let lastTenth = -1;
     const progress = (key) => (bytes, cached) => {
       done[key] = bytes;
-      const sum = Object.values(done).reduce((a, b) => a + b, 0);
-      showProgress(sum / totalBytes);
+      const sum = Object.values(done).reduce((a, b) => a + b, 0), f = sum / totalBytes;
+      showProgress(f);
       aiState("busy", cached ? "Loading saved model…" : `Downloading model ${MB(sum)} / ${MB(totalBytes)} MB`);
+      if (!cached && Math.floor(f * 10) !== lastTenth) { lastTenth = Math.floor(f * 10); stage(`painter: downloading the model (${lastTenth * 10}%)`); }
     };
-    const opts = { executionProviders: ["webgpu"], graphOptimizationLevel: "all" };
+    // Low-memory mode skips graph optimisation and the CPU memory arena: slower to paint, smaller peak memory.
+    const opts = lowMem
+      ? { executionProviders: ["webgpu"], graphOptimizationLevel: "disabled", enableCpuMemArena: false, enableMemPattern: false }
+      : { executionProviders: ["webgpu"], graphOptimizationLevel: "all" };
+    logLine(lowMem ? "low-memory mode: on" : "low-memory mode: off");
     for (const spec of AI.files) {
+      stage(`painter: reading the ${spec.key === "unet" ? "painter" : "decoder"} model`);
       let bytes = await fetchModel(spec, progress(spec.key));
       aiState("busy", spec.key === "unet" ? "Preparing the painter on your GPU…" : "Preparing decoder…");
+      stage(`painter: loading the ${spec.key === "unet" ? "painter (632 MB)" : "decoder"} onto the GPU`);
       const t0 = performance.now();
       ai[spec.key] = await ort.InferenceSession.create(bytes, opts);
       bytes = null;
       logLine(`${spec.key} session ready (${((performance.now() - t0) / 1000).toFixed(1)} s)`);
     }
+    stage("painter: first painting");
     showProgress(null);
     const fav = bestSeed();
     seedNoise(fav ? fav.seed : newSeed());
@@ -646,6 +697,7 @@ async function paint(weights) {
     const top = weights.map((w, j) => [ai.order[j], w]).filter(([, w]) => w > 0.05).sort((a, b) => b[1] - a[1]).map(([k, w]) => `${k} ${w.toFixed(2)}`).join(" ");
     logLine(`paint #${ai.count} layout #${ai.seed} · ${top} · ${learning ? "probing styles" : "using learned styles"} · unet ${(t1 - t0) | 0}ms vae ${(t2 - t1) | 0}ms`);
     aiState("ready", `Painted on-device in ${(ai.lastMs / 1000).toFixed(1)} s${learning ? " · watching your reaction" : ""}`);
+    if (!journal.ok) { journal.ok = true; stage("running: painting works on this phone"); }
     if (learning) beginReaction({ id: ai.count, weights, probe, seed: ai.seed });
   } catch (e) {
     logLine(`paint failed: ${e.message || e}`);
@@ -1158,6 +1210,44 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 })();
 
 /* ---------- Loop ---------- */
+let lowMem = false;
+(function checkLastSession() {
+  try { lowMem = localStorage.getItem("moodscape-lowmem") === "1"; } catch {}
+  const p = prevJournal;
+  const crashed = p && !p.clean && p.stage && p.stage !== "opened the app";
+  if (crashed) {
+    const where = p.stage.replace(/^[a-z]+: /, "");
+    let hint = "Try again; it keeps everything it already downloaded.";
+    if (/onto the GPU|reading the painter|first painting/.test(p.stage)) {
+      hint = p.lowMem
+        ? "That was already in low-memory mode, so this phone probably can't hold the 632 MB painter in memory. Untick 'Paint with the on-device model' to use the camera with the live sketch, and send me the steps below."
+        : "That's the most memory-hungry step, where the 632 MB painter moves onto the GPU. I've switched on low-memory mode for this try. Close other apps first.";
+      if (!p.lowMem) lowMem = true;
+    } else if (/downloading/.test(p.stage)) {
+      hint = "The download was cut off. That can be a dropped connection, the screen turning off, or the phone running low on memory. Stay on Wi-Fi with the screen on. Low-memory mode is on for this try.";
+      lowMem = true;
+    } else if (/face tracker/.test(p.stage)) {
+      hint = "The face tracker crashed while starting on the GPU. Low-memory mode keeps it on the CPU instead.";
+      lowMem = true;
+    } else if (/^running/.test(p.stage)) {
+      hint = "Painting had been working, so this was probably memory filling up or the phone getting hot over time. Low-memory mode is on for this try.";
+      lowMem = true;
+    }
+    $("#crashStage").textContent = where;
+    $("#crashHint").textContent = hint;
+    $("#crashLog").textContent = (p.log || []).slice().reverse().join("\n") || "No steps were recorded.";
+    $("#crashNote").hidden = false;
+    console.warn("[moodscape] previous session stopped while:", p.stage, p);
+  }
+  $("#lowMem").checked = lowMem;
+  journal.lowMem = lowMem;
+  try { localStorage.setItem("moodscape-lowmem", lowMem ? "1" : "0"); } catch {}
+})();
+$("#lowMem").addEventListener("change", (e) => {
+  lowMem = e.target.checked; journal.lowMem = lowMem; window.__lowMem = lowMem; resize();
+  try { localStorage.setItem("moodscape-lowmem", lowMem ? "1" : "0"); } catch {}
+});
+window.__lowMem = lowMem; resize();
 decodeMoodEmbeddings();
 loadTaste();
 setDemoTarget("calm"); demo.t = 4;
