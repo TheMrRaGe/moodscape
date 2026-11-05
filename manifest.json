@@ -2,7 +2,7 @@
   "name": "Moodscape",
   "short_name": "Moodscape",
   "description": "A landscape that reads your face and paints itself with an on-device AI model.",
-  "start_url": "./",
+  "start_url": "./index.html",
   "scope": "./",
   "display": "fullscreen",
   "orientation": "portrait",
