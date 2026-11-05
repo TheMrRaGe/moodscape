@@ -2,3 +2,6 @@
 pc-painter/models/
 pc-painter/bin/
 pc-painter/.venv/
+pc-painter/profiles.json
+pc-painter/profiles.*.json
+pc-painter/profiles.tmp

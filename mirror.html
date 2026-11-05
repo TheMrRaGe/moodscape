@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07080c">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Moodscape Mirror</title>
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600&family=Young+Serif&display=swap">
+<style>
+/* A gilded arched mirror on a dark wall. The painting inside is streamed live from the laptop; the wall picks up
+   the painting's colour, and the glass glows warmer while the person in front of it is lighting up. */
+:root{
+  --bg:#07080c;
+  --ink:#f3efe6;
+  --ink-dim:rgba(243,239,230,.62);
+  --line:rgba(243,239,230,.16);
+  --chip:rgba(10,11,16,.6);
+  --gold:#d9b66b;
+  --spill:40,44,60;           /* average colour of the painting, set from script */
+  --glow:0;                   /* 0..1, how much the viewer is lighting up */
+  --f-display:"Young Serif", Georgia, "Times New Roman", serif;
+  --f-ui:"Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color-scheme:dark;
+}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:14px var(--f-ui);overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+[hidden]{display:none!important}
+button{font:inherit;color:inherit}
+
+.wall{position:fixed;inset:0;background:
+  radial-gradient(ellipse 80% 55% at 50% 42%, rgba(var(--spill),.42), rgba(var(--spill),0) 70%),
+  radial-gradient(ellipse 120% 80% at 50% 120%, rgba(0,0,0,.6), transparent 60%), var(--bg);
+  transition:background 1.6s linear}
+
+.room{position:fixed;inset:0;display:grid;grid-template-rows:auto 1fr auto;grid-template-columns:minmax(0,1fr);align-items:center;justify-items:center;
+  padding:calc(10px + env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-left,0px)) calc(12px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-right,0px));gap:10px}
+
+.who{justify-self:stretch;display:flex;align-items:flex-start;justify-content:space-between;gap:12px;transition:opacity .4s}
+.who-name{background:none;border:0;padding:0;text-align:left;cursor:pointer;min-width:0;flex:1}
+.who-name b{display:block;font:400 1.6rem/1.15 var(--f-display);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who-name span{display:block;font-size:.76rem;color:var(--ink-dim);margin-top:3px;letter-spacing:.02em}
+.tools{display:flex;gap:6px;flex:none}
+.chip{display:inline-flex;align-items:center;min-height:36px;padding:0 13px;border-radius:999px;border:1px solid var(--line);background:var(--chip);font:500 .8rem/1 var(--f-ui);cursor:pointer}
+.chip:disabled{opacity:.4;cursor:default}
+.chip:focus-visible,.btn:focus-visible,.who-name:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+
+/* the mirror */
+.mirror{position:relative;width:min(100%, calc((100dvh - 230px) * .8), 640px);aspect-ratio:4/5;padding:11px;
+  border-radius:50% 50% 16px 16px / 34% 34% 16px 16px;
+  background:linear-gradient(140deg,#5d4519 0%,#c9a45a 18%,#f3dc9c 30%,#9b7633 46%,#e8c87f 62%,#7a5a24 80%,#d2ae62 100%);
+  box-shadow:0 30px 70px -20px rgba(0,0,0,.85),0 0 0 1px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,240,200,.35),
+    0 0 calc(30px + 60px * var(--glow)) calc(-10px + 14px * var(--glow)) rgba(255,214,150,calc(.08 + .3 * var(--glow)));
+  transition:box-shadow .8s ease}
+.mirror::before{content:"";position:absolute;inset:5px;border-radius:inherit;border:1px solid rgba(60,40,10,.55);pointer-events:none}
+.glass{position:relative;width:100%;height:100%;border-radius:50% 50% 8px 8px / 33% 33% 8px 8px;overflow:hidden;background:#0c0d12;
+  box-shadow:inset 0 0 0 2px rgba(30,20,5,.7),inset 0 0 40px rgba(0,0,0,.65)}
+.glass canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity 1.4s ease}
+.glass canvas.on{opacity:1}
+.glass::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:inherit;
+  background:linear-gradient(115deg,rgba(255,255,255,.11) 0%,rgba(255,255,255,0) 28%,rgba(255,255,255,0) 70%,rgba(255,255,255,.05) 100%),
+    radial-gradient(ellipse at 50% 55%,rgba(255,226,170,calc(.16 * var(--glow))),transparent 65%);
+  box-shadow:inset 0 0 calc(30px + 50px * var(--glow)) rgba(255,220,160,calc(.05 + .25 * var(--glow)));transition:box-shadow .8s ease}
+.mist{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:var(--ink-dim);font:400 1rem/1.5 var(--f-display);transition:opacity 1s}
+
+.foot{justify-self:stretch;display:grid;gap:10px;transition:opacity .4s}
+.caption{text-align:center;font:400 clamp(1.15rem,5.2vw,1.6rem)/1.2 var(--f-display);min-height:1.2em;transition:opacity .7s ease;text-wrap:balance}
+.caption.fade{opacity:0}
+.line{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.state{display:flex;align-items:center;gap:8px;min-width:0;flex:1;font-size:.74rem;color:var(--ink-dim);font-variant-numeric:tabular-nums}
+.state .dot{width:7px;height:7px;border-radius:50%;background:var(--ink-dim);flex:none}
+.state.live .dot{background:var(--gold)}
+.state.err .dot{background:#ff8a7a}
+.state .txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.eye{width:40px;height:40px;border-radius:50%;overflow:hidden;flex:none;border:1px solid var(--line);background:#000;position:relative}
+.eye video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);display:block}
+.eye.seen{border-color:var(--gold)}
+body.calm .who,body.calm .foot .line{opacity:0;pointer-events:none}
+
+/* sheets */
+.sheet{position:fixed;left:0;right:0;bottom:0;max-height:78dvh;overflow:auto;padding:18px max(16px,env(safe-area-inset-left,0px)) calc(18px + env(safe-area-inset-bottom,0px));
+  background:rgba(9,10,15,.96);border-top:1px solid var(--line);border-radius:18px 18px 0 0;display:grid;gap:14px;box-shadow:0 -20px 50px rgba(0,0,0,.6)}
+@media (min-width:700px){.sheet{left:auto;right:16px;bottom:16px;width:26rem;border-radius:16px;border:1px solid var(--line)}}
+.sheet h2{margin:0;font:400 1.25rem/1.2 var(--f-display)}
+.head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.sub{font-size:.8rem;color:var(--ink-dim);line-height:1.5}
+.person{display:grid;gap:8px;padding:12px;border-radius:12px;border:1px solid var(--line)}
+.person.here{border-color:rgba(217,182,107,.6)}
+.person .top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.person b{font:400 1.05rem/1.2 var(--f-display)}
+.person small{color:var(--ink-dim);font-size:.72rem}
+.bars{display:grid;grid-template-columns:7.2rem 1fr;gap:5px 10px;align-items:center;font-size:.74rem}
+.bars span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--ink-dim)}
+.bar{height:5px;border-radius:3px;background:rgba(243,239,230,.08);overflow:hidden}
+.bar i{display:block;height:100%;background:var(--gold);border-radius:3px}
+.acts{display:flex;gap:6px;flex-wrap:wrap}
+.acts .chip{min-height:32px;font-size:.74rem}
+.chip.warn{border-color:#ff8a7a;color:#ffb3a8}
+.rename{display:flex;gap:6px}
+.rename input{flex:1;min-width:0;min-height:36px;border-radius:10px;border:1px solid var(--line);background:#0c0d12;color:var(--ink);padding:0 10px;font:500 .9rem var(--f-ui)}
+.switch{display:inline-flex;align-items:center;gap:8px;font-size:.84rem;cursor:pointer}
+.switch input{width:18px;height:18px;margin:0;accent-color:var(--gold)}
+pre.log{margin:0;font:400 .66rem/1.55 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:var(--ink-dim);white-space:pre-wrap;word-break:break-word;max-height:12rem;overflow:auto;-webkit-user-select:text;user-select:text}
+
+.intro{position:fixed;inset:0;display:grid;place-items:center;padding:calc(16px + env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-left,0px)) calc(16px + env(safe-area-inset-bottom,0px));background:rgba(5,6,9,.72);overflow:auto}
+.card{width:100%;max-width:29rem;padding:22px 20px 20px;border-radius:18px;border:1px solid var(--line);background:rgba(10,11,16,.92);display:grid;gap:14px}
+.eyebrow{font-size:.72rem;text-transform:uppercase;letter-spacing:.16em;color:var(--gold)}
+.card h1{margin:0;font:400 2.3rem/1.05 var(--f-display)}
+.card p{margin:0;color:var(--ink-dim);line-height:1.55;font-size:.94rem}
+.card .fine{font-size:.78rem}
+.btn{min-height:48px;border-radius:12px;border:0;background:var(--gold);color:#16120a;font:600 1rem/1 var(--f-ui);cursor:pointer}
+.err{padding:12px;border-radius:12px;border:1px solid #ff8a7a;background:rgba(255,138,122,.08);font-size:.86rem;line-height:1.45}
+@media (prefers-reduced-motion:reduce){.glass canvas,.caption,.wall,.mirror,.glass::after{transition:none}}
+</style>
+</head>
+<body>
+<div class="wall" aria-hidden="true"></div>
+
+<main class="room">
+  <header class="who">
+    <button class="who-name" id="whoBtn" type="button" aria-label="Rename the person in front of the mirror">
+      <b id="whoName">Mirror</b><span id="whoSub">Connecting to your laptop…</span>
+    </button>
+    <div class="tools">
+      <button class="chip" id="btnPeople" type="button" aria-expanded="false" aria-controls="people">People</button>
+      <button class="chip" id="btnCalm" type="button">Hide</button>
+    </div>
+  </header>
+
+  <div class="mirror" id="mirror">
+    <div class="glass">
+      <canvas id="paint" width="512" height="512" aria-label="A painting of what the person in front of the mirror responds to"></canvas>
+      <div class="mist" id="mist">The glass is still.</div>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <div class="caption" id="caption" aria-live="polite"></div>
+    <div class="line">
+      <div class="state" id="state"><span class="dot"></span><span class="txt" id="stateTxt">Not connected</span></div>
+      <button class="chip" id="btnNext" type="button" disabled title="Show something else (counts as a mild no)">Something else</button>
+      <div class="eye" id="eye" aria-hidden="true"><video id="video" playsinline muted autoplay></video></div>
+    </div>
+  </footer>
+</main>
+
+<section class="sheet" id="people" hidden aria-label="People the mirror knows">
+  <div class="head">
+    <h2>Who the mirror knows</h2>
+    <button class="chip" id="btnClose" type="button">Close</button>
+  </div>
+  <label class="switch" for="learnOn"><input type="checkbox" id="learnOn" checked> Learn from reactions</label>
+  <div class="sub">Each person gets their own taste. Bars show how much their face lights up at each world. A longer bar means a bigger reaction, and a fainter one means it isn't sure yet. Names, face fingerprints and tastes are stored only on your laptop.</div>
+  <div id="peopleList" class="sub">Nobody yet.</div>
+  <div class="sub"><b>What it's deciding</b></div>
+  <pre class="log" id="log"></pre>
+</section>
+
+<div class="intro" id="intro">
+  <div class="card" role="dialog" aria-labelledby="introTitle">
+    <div class="eyebrow">Moodscape</div>
+    <h1 id="introTitle">The Mirror</h1>
+    <p>A painting that changes for whoever is looking at it. It recognizes you, watches how your face responds, and drifts toward the worlds that make you light up. The longer you look, the better it knows you.</p>
+    <p class="fine">The painting is made live on your laptop. This phone sends your laptop only numbers: your expression about 12 times a second, and a face fingerprint (128 numbers) every couple of seconds so it knows who you are. No video or photos leave the phone.</p>
+    <div class="err" id="introErr" hidden></div>
+    <button class="btn" id="btnStart" type="button">Look into the mirror</button>
+  </div>
+</div>
+
+<script type="module">
+/* ---------- Settings ---------- */
+const CFG = {
+  vision: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14",
+  faceModel: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+  faceApi: "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15",
+  detectEveryMs: 70,      // expression reads (~14 a second), each one sent to the laptop
+  idEveryMs: 1300,        // face fingerprint while it's still working out who you are…
+  idSettledMs: 3000,      // …and once it knows (still checking, in case someone else steps in)
+};
+const PC_KEY = "moodscape-mirror-pc";
+const $ = (s) => document.querySelector(s);
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+
+/* ---------- Where the painter is ----------
+   Normally this page is opened from the laptop's own link, so the painter is this page's origin. If it's opened
+   from elsewhere with #pc=<laptop address>, that address is remembered. */
+(function pair() {
+  const m = location.hash.match(/^#pc=(https?:\/\/[a-z0-9.-]+(?::\d+)?)\/?$/i);
+  if (!m) return;
+  try { localStorage.setItem(PC_KEY, m[1]); } catch {}
+  history.replaceState(null, "", location.pathname + location.search);
+})();
+function painterBase() {
+  let saved = ""; try { saved = localStorage.getItem(PC_KEY) || ""; } catch {}
+  if (/^https?:$/.test(location.protocol) && !/github\.io$|githack\.com$/.test(location.hostname)) return location.origin;
+  return saved;
+}
+
+/* ---------- Log of decisions (shown in the People sheet) ---------- */
+const log = [];
+function logLine(s) {
+  const t = new Date().toTimeString().slice(0, 8);
+  if (log[0]?.endsWith(s)) return;
+  log.unshift(`${t} ${s}`); if (log.length > 40) log.pop();
+  $("#log").textContent = log.join("\n");
+  console.log("[mirror]", s);
+}
+
+/* ---------- Connection to the laptop ---------- */
+const net = { ws: null, open: false, tries: 0, host: "", gpu: "", lastFrame: 0, decoding: false, frames: 0 };
+const paint = $("#paint"), pctx = paint.getContext("2d");
+function connect() {
+  const base = painterBase();
+  if (!base) { setState("err", "Open this page from the link your laptop prints when you run mirror-windows.bat."); return; }
+  const url = new URL("/api/mirror", base); url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  setState("", `Connecting to your laptop…`);
+  let ws;
+  try { ws = new WebSocket(url); } catch (e) { return retry(e.message); }
+  ws.binaryType = "arraybuffer";
+  net.ws = ws;
+  ws.onopen = () => { net.open = true; net.tries = 0; logLine("connected to the painter"); $("#btnNext").disabled = false; };
+  ws.onmessage = (ev) => (typeof ev.data === "string" ? onJson(ev.data) : onFrame(ev.data));
+  ws.onclose = () => { if (net.ws === ws) { net.open = false; net.ws = null; $("#btnNext").disabled = true; retry("connection closed"); } };
+}
+function retry(why) {
+  const wait = Math.min(10000, 1500 * 2 ** net.tries++);
+  setState("err", `Can't reach the painter on your laptop (${why}). Is it still running? Retrying in ${Math.round(wait / 1000)} s…`);
+  setTimeout(connect, wait);
+}
+function send(obj) { if (net.open) try { net.ws.send(JSON.stringify(obj)); } catch {} }
+
+async function onFrame(buf) {
+  if (buf.byteLength < 16) return;
+  const [seq, ms] = new Uint32Array(buf, 0, 2);
+  send({ ack: seq });
+  if (net.decoding) return;           // still drawing the last one: skip rather than fall behind
+  net.decoding = true;
+  try {
+    const bmp = await createImageBitmap(new Blob([new Uint8Array(buf, 12)], { type: "image/jpeg" }));
+    pctx.drawImage(bmp, 0, 0, 512, 512); bmp.close?.();
+    if (!paint.classList.contains("on")) { paint.classList.add("on"); $("#mist").style.opacity = 0; }
+    net.frames++; net.lastFrame = performance.now(); net.gpuMs = ms;
+  } catch {} finally { net.decoding = false; }
+}
+
+let lastStatus = null, lastCaption = "", lastWhy = "";
+function onJson(text) {
+  let d; try { d = JSON.parse(text); } catch { return; }
+  if (d.hello) {
+    net.host = d.hello.host; net.gpu = d.hello.gpu;
+    logLine(`painting on ${d.hello.host} (${d.hello.gpu}, ${d.hello.provider}) · ${d.hello.worlds.length} worlds`);
+  }
+  if (d.people) renderPeople(d.people);
+  if (d.status) renderStatus(d.status);
+}
+
+/* ---------- What the laptop says ---------- */
+function renderStatus(s) {
+  lastStatus = s;
+  const who = s.who;
+  if (s.seeing === "person") {
+    $("#whoName").textContent = who.name;
+    $("#whoSub").textContent = who.warming ? "Getting to know your resting face…"
+      : `${who.reactions} reactions learned${s.learning ? "" : " · learning paused"}${who.name.startsWith("Guest") ? " · tap to name" : ""}`;
+  } else if (s.seeing === "identifying") {
+    $("#whoName").textContent = "Someone's here";
+    $("#whoSub").textContent = "Hold still a moment…";
+  } else {
+    $("#whoName").textContent = "Mirror";
+    $("#whoSub").textContent = cam.on ? "No one is looking" : "Camera is off";
+  }
+  $("#whoBtn").disabled = !who;
+  const cap = s.showing.map(([n]) => n).join(" · ");
+  if (cap && cap !== lastCaption) {
+    const el = $("#caption");
+    el.classList.add("fade");
+    setTimeout(() => { el.textContent = cap; el.classList.remove("fade"); }, 450);
+    lastCaption = cap;
+  }
+  document.documentElement.style.setProperty("--glow", clamp(s.glow * 1.6).toFixed(2));
+  if (s.why && s.why !== lastWhy) { lastWhy = s.why; logLine(s.why); }
+  $("#learnOn").checked = s.learning;
+  const live = performance.now() - net.lastFrame < 2000;
+  setState(live ? "live" : "", live ? `Live from ${net.host || "your laptop"} · ${s.fps.toFixed(0)} fps` : "Waiting for the first painting…");
+  if (!$("#people").hidden && who && who.pid !== peopleFor) { peopleFor = who.pid; send({ cmd: "people" }); }
+}
+function setState(kind, text) { const el = $("#state"); el.className = `state ${kind}`; $("#stateTxt").textContent = text; }
+
+/* The wall takes on the painting's colour, like light from a real mirror. */
+const tiny = document.createElement("canvas"); tiny.width = tiny.height = 8;
+const tctx = tiny.getContext("2d", { willReadFrequently: true });
+setInterval(() => {
+  if (!paint.classList.contains("on")) return;
+  tctx.drawImage(paint, 0, 0, 8, 8);
+  const d = tctx.getImageData(0, 0, 8, 8).data; let r = 0, g = 0, b = 0;
+  for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+  const n = d.length / 4;
+  document.documentElement.style.setProperty("--spill", `${(r / n) | 0},${(g / n) | 0},${(b / n) | 0}`);
+}, 900);
+
+/* ---------- People sheet ---------- */
+let peopleFor = null, people = [];
+function renderPeople(list) {
+  people = list; peopleFor = lastStatus?.who?.pid ?? null;
+  const box = $("#peopleList");
+  if (!list.length) { box.textContent = "Nobody yet. Look into the mirror for a few seconds and it will start a profile for you."; return; }
+  box.innerHTML = "";
+  for (const p of list) {
+    const el = document.createElement("div");
+    el.className = "person" + (p.pid === lastStatus?.who?.pid ? " here" : "");
+    const max = Math.max(0.05, ...p.top.map((t) => Math.abs(t.score)));
+    el.innerHTML = `<div class="top"><div><b></b><br><small></small></div><div class="acts"><button class="chip" data-act="rename" type="button">Rename</button><button class="chip" data-act="forget" type="button">Forget</button></div></div><div class="bars"></div>`;
+    el.querySelector("b").textContent = p.name;
+    el.querySelector("small").textContent = `${p.reactions} reactions · ${p.faces} face ${p.faces === 1 ? "view" : "views"}${p.pid === lastStatus?.who?.pid ? " · looking now" : ""}`;
+    const bars = el.querySelector(".bars");
+    if (p.reactions < 10) bars.innerHTML = `<span style="grid-column:1/-1">Still learning what ${p.name} likes.</span>`;
+    else for (const t of p.top) {
+      const s = document.createElement("span"); s.textContent = t.world;
+      const b = document.createElement("div"); b.className = "bar";
+      const i = document.createElement("i");
+      i.style.width = `${clamp(t.score / max) * 100}%`; i.style.opacity = 0.35 + 0.65 * clamp(t.sure);
+      b.appendChild(i); bars.append(s, b);
+    }
+    el.querySelector('[data-act="rename"]').onclick = () => startRename(el, p);
+    const fb = el.querySelector('[data-act="forget"]');
+    fb.onclick = () => {
+      if (fb.dataset.armed) { send({ cmd: "forget", pid: p.pid }); return; }
+      fb.dataset.armed = "1"; fb.classList.add("warn"); fb.textContent = "Tap again to forget";
+      setTimeout(() => { delete fb.dataset.armed; fb.classList.remove("warn"); fb.textContent = "Forget"; }, 3000);
+    };
+    box.appendChild(el);
+  }
+}
+function startRename(el, p) {
+  const row = document.createElement("form"); row.className = "rename";
+  row.innerHTML = `<input maxlength="32" aria-label="Name" autocomplete="off"><button class="chip" type="submit">Save</button>`;
+  const input = row.querySelector("input"); input.value = p.name.startsWith("Guest") ? "" : p.name; input.placeholder = p.name;
+  row.onsubmit = (e) => { e.preventDefault(); const name = input.value.trim(); if (name) send({ cmd: "rename", pid: p.pid, name }); row.remove(); };
+  el.appendChild(row); input.focus();
+}
+function togglePeople(open = $("#people").hidden) {
+  $("#people").hidden = !open; $("#btnPeople").setAttribute("aria-expanded", String(open));
+  if (open) send({ cmd: "people" });
+}
+$("#btnPeople").onclick = () => togglePeople();
+$("#btnClose").onclick = () => togglePeople(false);
+$("#whoBtn").onclick = () => {
+  const pid = lastStatus?.who?.pid; if (!pid) return;
+  togglePeople(true);
+  const tryOpen = () => { const i = people.findIndex((p) => p.pid === pid); if (i >= 0) startRename($("#peopleList").children[i], people[i]); };
+  setTimeout(tryOpen, 400);
+};
+$("#learnOn").onchange = (e) => send({ cmd: "learn", on: e.target.checked });
+$("#btnNext").onclick = () => send({ cmd: "next" });
+$("#btnCalm").onclick = (e) => { e.stopPropagation(); document.body.classList.add("calm"); };
+$("#mirror").onclick = () => document.body.classList.remove("calm");
+
+/* ---------- Camera, expression and identity ---------- */
+const video = $("#video");
+const cam = { on: false, landmarker: null, faceapi: null, lastDetect: 0, lastVideoTime: -1, faceAt: 0, idBusy: false, idAt: 0 };
+
+async function start() {
+  $("#btnStart").disabled = true;
+  const err = (msg) => { $("#introErr").hidden = false; $("#introErr").textContent = msg; $("#btnStart").disabled = false; };
+  if (!navigator.mediaDevices?.getUserMedia) return err("The camera needs a secure page. Open the https:// link your laptop printed.");
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    video.srcObject = stream; await video.play().catch(() => {});
+  } catch (e) {
+    return err(e?.name === "NotAllowedError" ? "Camera access was blocked. Allow it for this page in Chrome's site settings, then try again." : "The camera didn't start. Close other apps using it and try again.");
+  }
+  $("#intro").hidden = true;
+  try { await document.documentElement.requestFullscreen?.({ navigationUI: "hide" }); } catch {}
+  keepAwake();
+  cam.on = true;
+  setState("", "Loading face tracking…");
+  try {
+    const vision = await import(`${CFG.vision}/vision_bundle.mjs`);
+    const files = await vision.FilesetResolver.forVisionTasks(`${CFG.vision}/wasm`);
+    const make = (delegate) => vision.FaceLandmarker.createFromOptions(files, {
+      baseOptions: { modelAssetPath: CFG.faceModel, delegate }, outputFaceBlendshapes: true, runningMode: "VIDEO", numFaces: 1 });
+    try { cam.landmarker = await make("GPU"); } catch { cam.landmarker = await make("CPU"); logLine("face tracking on CPU (GPU wasn't available)"); }
+    logLine("expression tracking ready");
+  } catch (e) {
+    setState("err", "Couldn't load face tracking. Check the phone's connection and reload."); logLine(`face tracking failed: ${e.message || e}`); return;
+  }
+  loadIdentity();
+  requestAnimationFrame(loop);
+}
+$("#btnStart").onclick = start;
+
+/* Face fingerprint: face-api's recognition network (128 numbers per face). Loaded after expression tracking so
+   the mirror starts reacting first; until it's ready the laptop sees a face but can't tell who it is. */
+async function loadIdentity() {
+  try {
+    const fa = await import(`${CFG.faceApi}/dist/face-api.esm.js`);
+    try { await fa.tf.setBackend("webgl"); } catch {}
+    await fa.tf.ready();
+    const m = `${CFG.faceApi}/model`;
+    await Promise.all([fa.nets.tinyFaceDetector.loadFromUri(m), fa.nets.faceLandmark68TinyNet.loadFromUri(m), fa.nets.faceRecognitionNet.loadFromUri(m)]);
+    cam.faceapi = fa;
+    logLine(`face recognition ready (${fa.tf.getBackend()})`);
+  } catch (e) {
+    logLine(`face recognition failed to load (${e.message || e}); it will treat everyone as one person`);
+    setState("err", "Face recognition didn't load, so it can't tell people apart. Reload to try again.");
+  }
+}
+async function identify(now) {
+  const fa = cam.faceapi;
+  if (!fa || cam.idBusy || now - cam.faceAt > 300) return;
+  const settled = lastStatus?.seeing === "person";
+  if (now - cam.idAt < (settled ? CFG.idSettledMs : CFG.idEveryMs)) return;
+  cam.idBusy = true; cam.idAt = now;
+  try {
+    const r = await fa.detectSingleFace(video, new fa.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 })).withFaceLandmarks(true).withFaceDescriptor();
+    if (r && r.detection.score > 0.6 && r.detection.box.width > 70) send({ id: Array.from(r.descriptor, (v) => +v.toFixed(4)) });
+  } catch (e) { logLine(`face read failed: ${e.message || e}`); }
+  finally { cam.idBusy = false; }
+}
+
+function avg(c, a, b) { return ((c[a] || 0) + (c[b] || 0)) / 2; }
+function readFace(now) {
+  if (!cam.landmarker || video.readyState < 2 || now - cam.lastDetect < CFG.detectEveryMs || video.currentTime === cam.lastVideoTime) return;
+  cam.lastDetect = now; cam.lastVideoTime = video.currentTime;
+  let res; try { res = cam.landmarker.detectForVideo(video, now); } catch { return; }
+  const shapes = res?.faceBlendshapes?.[0]?.categories, lm = res?.faceLandmarks?.[0];
+  if (!shapes || !lm) { send({ s: null }); $("#eye").classList.remove("seen"); return; }
+  cam.faceAt = now; $("#eye").classList.add("seen");
+  const c = {}; for (const s of shapes) c[s.categoryName] = s.score;
+  const nose = lm[1], L = lm[234], R = lm[454], top = lm[10], chin = lm[152];
+  const half = Math.max(1e-3, Math.abs(R.x - L.x) / 2), halfH = Math.max(1e-3, Math.abs(chin.y - top.y) / 2);
+  const s = [
+    avg(c, "mouthSmileLeft", "mouthSmileRight"),                                    // smile
+    avg(c, "cheekSquintLeft", "cheekSquintRight"),                                  // cheek (a real smile reaches the eyes)
+    Math.max(avg(c, "eyeWideLeft", "eyeWideRight"), ((c.browInnerUp || 0) + avg(c, "browOuterUpLeft", "browOuterUpRight")) / 2), // wonder
+    c.jawOpen || 0,                                                                 // jaw (awe)
+    avg(c, "mouthFrownLeft", "mouthFrownRight"),                                    // frown
+    avg(c, "browDownLeft", "browDownRight"),                                        // browDown
+    avg(c, "noseSneerLeft", "noseSneerRight"),                                      // sneer (disgust)
+    avg(c, "eyeBlinkLeft", "eyeBlinkRight"),                                        // blink / eyes closed
+    (nose.x - (L.x + R.x) / 2) / half,                                              // yaw: turned away?
+    (nose.y - (top.y + chin.y) / 2) / halfH - 0.15,                                 // pitch: looking down at something else?
+    Math.hypot(R.x - L.x, R.y - L.y),                                               // size: leaning in
+  ];
+  send({ s: s.map((v) => +v.toFixed(3)) });
+  identify(now);
+}
+
+function loop(now) { readFace(now); requestAnimationFrame(loop); }
+
+let wakeLock = null;
+async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {} }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && cam.on) keepAwake(); });
+
+connect();
+</script>
+</body>
+</html>

@@ -92,6 +92,38 @@ PC:    SDXS one-step painting on the GPU, with a slow drift in noise space so th
 - Options: `--max-fps 15` caps the frame rate, `--motion 0` turns off the gentle self-motion, and `--no-tunnel` serves on the local network only.
 - If the network blocks WebSockets, the app falls back to single paintings over HTTPS (`/api/paint`).
 
+## The Mirror: a painting that shows each person what they light up at
+
+`mirror.html` is a second app, served by the PC painter. Prop your phone up like a small mirror and look into it. It recognizes who is looking, watches how their face responds, and the painting melts continuously toward the worlds that person lights up at. Each person gets their own taste. When someone else steps in, the painting changes for them.
+
+```
+phone:   camera → MediaPipe expression (~14×/s) + face-api fingerprint (128 numbers, every 1.3–3 s) ──► laptop
+laptop:  who is it?      nearest known fingerprint, or a new "Guest" after 3 unknown reads
+         what do they    per-person affinity for each world in desires.txt, learned by Bayesian
+         desire?         regression: what was on screen 0.8 s ago → how the face responded
+         what to show?   linger while they light up, wander when they go flat, pick next by Thompson sampling
+         paint it        SDXS one step per frame, blending world embeddings; layouts slerp, nothing cuts  ──► JPEG stream
+```
+
+**Run it:**
+
+1. On the laptop, double-click **`pc-painter/mirror-windows.bat`** (on Linux/macOS: `./pc-painter/mirror.sh`). The first run sets up Python, downloads the model, and encodes the worlds on the graphics card.
+2. Scan the QR code it prints with your Android phone and open it in Chrome. Tap **Look into the mirror** and allow the camera.
+3. Hold still for a couple of seconds. It meets you as "Guest 1"; tap the name to rename yourself.
+
+You can also try it on the laptop with its own webcam: `http://localhost:8765/mirror.html`.
+
+**What it learns from:** a growing smile, smile lines around the eyes, wonder (wide eyes, raised brows, open mouth) and leaning in all count as lighting up. Frowning, lowered brows, a wrinkled nose, looking away, turning your head and closing your eyes count against. Each person's resting face is learned first, so reactions are measured against their own neutral. **Something else** moves on and counts as a mild no. In simulation (`python pc-painter/test_mirror_sim.py`), a viewer's two favourite worlds go from about 25% of screen time in the first 5 minutes to about 80% after half an hour. It recognized a returning viewer and showed their favourite within about 2 s.
+
+**Change the worlds:** edit `pc-painter/desires.txt`, one `Name | what to paint` per line, then restart. Learned scores are kept by world name.
+
+**Privacy:** the phone sends the laptop only numbers. Names, face fingerprints and tastes are stored in `pc-painter/profiles.json` on the laptop, which is git-ignored. **Forget** in the People panel deletes a person; deleting the file forgets everyone.
+
+**Notes:**
+- The link changes every time the script restarts, so scan the new QR code then.
+- Speed is whatever the laptop's GPU manages. The painter prints its measured frame rate at startup; under 6 fps it looks like a slow dissolve rather than live.
+- `start-windows.bat` still works exactly as before for the mood app. Both apps share the one painter.
+
 ## Tuning
 
 At the top of the script in `index.html`:

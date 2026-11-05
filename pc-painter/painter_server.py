@@ -10,6 +10,10 @@ turns those into frames as fast as its GPU allows and streams them back.
     python painter_server.py --no-tunnel  # local network / localhost only
     python painter_server.py --cpu        # force CPU (very slow; for testing)
     python painter_server.py --max-fps 15 --motion 0.5
+    python painter_server.py --qr mirror  # the QR code opens the Mirror instead of Moodscape
+
+Mirror mode (mirror.html + mirror.py): the phone sends face numbers and a face fingerprint; this PC works out
+who is looking, learns what each person lights up at, and streams a painting that melts toward it.
 
 Every decision is printed: GPU backend and name, where the model came from, measured frame rate, each
 phone that connects, and per-connection stream stats.
@@ -24,6 +28,8 @@ import numpy as np
 import onnxruntime as ort
 from aiohttp import web, WSMsgType
 from PIL import Image
+
+import mirror as mirror_mod
 
 HERE = Path(__file__).resolve().parent
 APP_DIR = HERE.parent                     # the repo root holds index.html, manifest.json, icons
@@ -45,8 +51,8 @@ def log(msg):
 # ---------------------------------------------------------------- model + GPU
 
 def download(name, size):
-    MODEL_DIR.mkdir(exist_ok=True)
     path = MODEL_DIR / name
+    path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and path.stat().st_size == size:
         log(f"model: {name} already downloaded")
         return path
@@ -145,17 +151,34 @@ class Painter:
         buf = io.BytesIO(); Image.fromarray(rgb).save(buf, format="JPEG", quality=82)
         return buf.getvalue()
 
+    def _living(self, seed, t, m):
+        n0, n1, n2 = self._noise(int(seed) & 0x7FFFFFFF)
+        a, b = m * 0.10 * np.sin(t * 0.35), m * 0.07 * np.sin(t * 0.23 + 1.3)  # slow rotation in noise space = gentle living motion
+        return n0 * np.cos(a) * np.cos(b) + n1 * np.sin(a) + n2 * np.cos(a) * np.sin(b)
+
     def frame(self, ctl, t):
         """One live frame from a phone's control message. Returns (jpeg, ms)."""
         t0 = time.perf_counter()
         w = np.clip(np.asarray(ctl["w"], np.float32).reshape(6), 0, 1)
         th = np.clip(np.asarray(ctl["th"], np.float32).reshape(6, 6), -0.5, 1.0)
         emb = w @ self.E + (w[:, None] * th).reshape(36) @ self.D
-        n0, n1, n2 = self._noise(int(ctl["seed"]) & 0x7FFFFFFF)
         m = self.motion * float(np.clip(ctl.get("motion", 1.0), 0, 1))
-        a, b = m * 0.10 * np.sin(t * 0.35), m * 0.07 * np.sin(t * 0.23 + 1.3)  # slow rotation in noise space = gentle living motion
-        x = (n0 * np.cos(a) * np.cos(b) + n1 * np.sin(a) + n2 * np.cos(a) * np.sin(b)) * SIGMA
+        x = self._living(ctl["seed"], t, m) * SIGMA
         jpeg = self._run(emb, x)
+        ms = (time.perf_counter() - t0) * 1000
+        self.count += 1
+        self.fps = 1000 / ms if self.fps == 0 else self.fps * 0.9 + (1000 / ms) * 0.1
+        return jpeg, ms
+
+    def frame_mirror(self, weights, seed_a, seed_b, s, t):
+        """One Mirror frame: a blend of worlds, with the layout melting from seed_a to seed_b (s = 0..1)."""
+        t0 = time.perf_counter()
+        emb = self.desires.embed(weights)
+        if seed_a == seed_b or s >= 1:
+            x = self._living(seed_b, t, self.motion)
+        else:  # spherical blend of two noise fields keeps the noise statistics right, so the layout morphs instead of cutting
+            x = np.cos(s * np.pi / 2) * self._living(seed_a, t, self.motion) + np.sin(s * np.pi / 2) * self._living(seed_b, t, self.motion)
+        jpeg = self._run(emb, x * SIGMA)
         ms = (time.perf_counter() - t0) * 1000
         self.count += 1
         self.fps = 1000 / ms if self.fps == 0 else self.fps * 0.9 + (1000 / ms) * 0.1
@@ -208,11 +231,16 @@ async def cors(request, handler):
     return resp
 
 
-def make_app(painter, gpu_pool, max_fps):
-    loop_ref = {}
+def phone_name(request):
+    ua = request.headers.get("User-Agent", "")
+    m = re.search(r"\(([^;)]+;[^;)]+)", ua)
+    return m.group(1) if m else "a phone"
 
+
+def make_app(painter, gpu_pool, max_fps, profiles=None):
     async def health(request):
-        return web.json_response({"ok": True, "painter": "pc", "stream": True, "provider": painter.provider, "gpu": painter.gpu,
+        return web.json_response({"ok": True, "painter": "pc", "stream": True, "mirror": profiles is not None,
+                                  "provider": painter.provider, "gpu": painter.gpu,
                                   "host": platform.node(), "fps": round(painter.fps, 1), "paintings": painter.count})
 
     async def paint(request):
@@ -232,8 +260,7 @@ def make_app(painter, gpu_pool, max_fps):
             return web.Response(status=403, text="origin not allowed")
         ws = web.WebSocketResponse(max_msg_size=1 << 16, heartbeat=20)
         await ws.prepare(request)
-        who = request.headers.get("User-Agent", "a phone")
-        who = re.search(r"\(([^;)]+;[^;)]+)", who).group(1) if re.search(r"\(([^;)]+;[^;)]+)", who) else "a phone"
+        who = phone_name(request)
         log(f"stream: {who} connected")
         st = {"ctl": None, "inflight": 0, "seq": 0, "frames": 0, "since": time.time(), "bytes": 0, "t0": time.time()}
         min_gap = 1.0 / max_fps
@@ -279,6 +306,99 @@ def make_app(painter, gpu_pool, max_fps):
             log(f"stream: {who} disconnected")
         return ws
 
+    async def mirror_stream(request):
+        """The Mirror: face numbers in, a painting of what this person lights up at out."""
+        if not origin_ok(request):
+            log(f"mirror: refused a connection from {request.headers.get('Origin')}")
+            return web.Response(status=403, text="origin not allowed")
+        ws = web.WebSocketResponse(max_msg_size=1 << 16, heartbeat=20)
+        await ws.prepare(request)
+        who = phone_name(request)
+        clock = time.monotonic
+        sess = mirror_mod.MirrorSession(painter.desires, profiles, log=log, who=who)
+        st = {"inflight": 0, "seq": 0, "frames": 0, "since": time.time(), "bytes": 0, "t0": time.time(), "fps": 0.0, "last": 0.0}
+        min_gap = 1.0 / max_fps
+        log(f"mirror: {who} connected; {len(profiles.people)} known people, {len(painter.desires.names)} worlds")
+
+        async def send_json(obj):
+            if not ws.closed:
+                await ws.send_str(json.dumps(obj, separators=(",", ":")))
+
+        await send_json({"hello": {"host": platform.node(), "gpu": painter.gpu, "provider": painter.provider.replace("ExecutionProvider", ""),
+                                   "fps": round(painter.fps, 1), "worlds": painter.desires.names}})
+        await send_json({"people": sess.people()})
+
+        async def render_loop():
+            loop = asyncio.get_running_loop()
+            last = 0.0
+            while not ws.closed:
+                if st["inflight"] >= 2 or time.time() - last < min_gap:
+                    await asyncio.sleep(0.004); continue
+                last = time.time()
+                D, sa, sb, s = sess.frame_params(clock())
+                try:
+                    jpeg, ms = await loop.run_in_executor(gpu_pool, painter.frame_mirror, D, sa, sb, s, time.time() - st["t0"])
+                except Exception as e:
+                    log(f"mirror: frame failed ({e})"); await asyncio.sleep(0.5); continue
+                if ws.closed: break
+                now = time.time()
+                if st["last"]:
+                    st["fps"] += (1 / max(1e-3, now - st["last"]) - st["fps"]) * 0.1
+                st["last"] = now
+                st["seq"] += 1; st["inflight"] += 1; st["frames"] += 1; st["bytes"] += len(jpeg)
+                await ws.send_bytes(struct.pack("<III", st["seq"], int(ms), 0) + jpeg)
+                if now - st["since"] >= 15:
+                    dt = now - st["since"]
+                    v = sess.viewer
+                    log(f"mirror: {st['frames'] / dt:.1f} fps to {who}, {st['bytes'] / dt / 1024:.0f} KB/s, GPU {ms:.0f} ms/frame; "
+                        f"looking: {v.name + f' ({v.beats} reactions learned)' if v else 'nobody'}")
+                    st.update(frames=0, bytes=0, since=now)
+
+        async def control_loop():
+            last_status = 0.0
+            while not ws.closed:
+                now = clock()
+                try:
+                    sess.tick(now)
+                    if now - last_status >= 0.25:
+                        last_status = now
+                        out = sess.status(now); out["fps"] = round(st["fps"], 1)
+                        await send_json({"status": out})
+                    profiles.save_if_due()
+                except Exception as e:
+                    log(f"mirror: control step failed ({e!r})")
+                await asyncio.sleep(0.05)
+
+        tasks = [asyncio.create_task(render_loop()), asyncio.create_task(control_loop())]
+        try:
+            async for msg in ws:
+                if msg.type != WSMsgType.TEXT:
+                    continue
+                try:
+                    d = json.loads(msg.data)
+                    if not isinstance(d, dict):
+                        continue
+                    if "ack" in d:
+                        st["inflight"] = max(0, st["inflight"] - 1)
+                    if "s" in d:
+                        sess.on_sample(d["s"], clock())
+                    if "id" in d:
+                        sess.on_identity(d["id"], clock())
+                    if "cmd" in d:
+                        if d["cmd"] != "people":
+                            sess.command(d, clock())
+                        await send_json({"people": sess.people()})
+                except Exception as e:
+                    log(f"mirror: ignored a bad message from {who} ({e!r})")
+        finally:
+            for t in tasks:
+                t.cancel()
+            if sess.viewer is not None:
+                sess.viewer.last_seen = time.time()
+            profiles.save(force=True)
+            log(f"mirror: {who} disconnected; profiles saved")
+        return ws
+
     async def static(request):
         rel = request.match_info.get("path", "") or "index.html"
         parts = [p for p in rel.split("/") if p]
@@ -293,6 +413,11 @@ def make_app(painter, gpu_pool, max_fps):
     app.router.add_get("/api/health", health)
     app.router.add_post("/api/paint", paint)
     app.router.add_get("/api/stream", stream)
+    if profiles is not None:
+        app.router.add_get("/api/mirror", mirror_stream)
+        async def save_profiles(_app):
+            profiles.save(force=True)
+        app.on_shutdown.append(save_profiles)
     app.router.add_get("/", static)
     app.router.add_get("/{path:.*}", static)
     return app
@@ -322,7 +447,7 @@ def cloudflared_path():
     return str(path)
 
 
-def start_tunnel(port):
+def start_tunnel(port, which):
     exe = cloudflared_path()
     if not exe:
         return None
@@ -334,27 +459,35 @@ def start_tunnel(port):
         for line in proc.stdout:
             m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
             if m:
-                show_link(m.group(0))
+                show_link(m.group(0), which)
         log("tunnel: cloudflared exited; the phone link has stopped working. Restart this script.")
     threading.Thread(target=watch, daemon=True).start()
     return proc
 
 
-def show_link(url):
+def show_link(url, which="moodscape"):
     pair = f"{APP_URL}#pc={url}"
+    mirror_url = f"{url}/mirror.html"
+    target = mirror_url if which == "mirror" else pair
     print("\n" + "=" * 72, flush=True)
-    print("  On your phone, scan this QR code (or open the link) in Chrome:\n", flush=True)
+    print(f"  On your phone, scan this QR code (or open the link) in Chrome to open the {'Mirror' if which == 'mirror' else 'Moodscape app'}:\n", flush=True)
     try:
         import qrcode
-        q = qrcode.QRCode(border=1, error_correction=qrcode.constants.ERROR_CORRECT_L); q.add_data(pair); q.make()
+        q = qrcode.QRCode(border=1, error_correction=qrcode.constants.ERROR_CORRECT_L); q.add_data(target); q.make()
         q.print_ascii(invert=True)
     except ImportError:
         print("  (pip install qrcode to show a scannable QR code here)", flush=True)
-    print(f"\n    {pair}\n", flush=True)
-    print("  It opens Moodscape at its usual address and pairs it with this PC, so your", flush=True)
-    print("  learned taste is kept. The tunnel address changes each time you restart this;", flush=True)
-    print("  scan the new code then. Direct link to this PC, if you prefer:", flush=True)
-    print(f"    {url}/", flush=True)
+    print(f"\n    {target}\n", flush=True)
+    if which == "mirror":
+        print("  The Mirror is served by this PC, so the link changes each time you restart", flush=True)
+        print("  this script; scan the new code then. People it has learned stay on this PC.", flush=True)
+        print(f"  Moodscape (mood app) link:  {pair}", flush=True)
+    else:
+        print("  It opens Moodscape at its usual address and pairs it with this PC, so your", flush=True)
+        print("  learned taste is kept. The tunnel address changes each time you restart this;", flush=True)
+        print("  scan the new code then. Direct link to this PC, if you prefer:", flush=True)
+        print(f"    {url}/", flush=True)
+        print(f"  Mirror link:  {mirror_url}", flush=True)
     print("=" * 72 + "\n", flush=True)
 
 
@@ -366,18 +499,25 @@ def main():
     ap.add_argument("--max-fps", type=float, default=24, help="cap the stream's frame rate (default 24)")
     ap.add_argument("--motion", type=float, default=1.0, help="how much the scene gently moves on its own, 0–1 (default 1)")
     ap.add_argument("--no-benchmark", action="store_true", help="skip the startup speed test")
+    ap.add_argument("--qr", choices=["moodscape", "mirror"], default="moodscape", help="which app the phone QR code opens")
+    ap.add_argument("--worlds", default=str(HERE / "desires.txt"), help="the Mirror's list of worlds")
+    ap.add_argument("--profiles", default=str(HERE / "profiles.json"), help="where the Mirror keeps the people it knows")
     a = ap.parse_args()
     if not (APP_DIR / "index.html").exists():
         raise SystemExit(f"index.html not found in {APP_DIR}; keep this folder inside the moodscape repo")
     painter = Painter(pick_providers(a.cpu), a.motion)
+    painter.desires = mirror_mod.Desires(a.worlds, MODEL_DIR, download, log, providers=painter.unet.get_providers())
+    profiles = mirror_mod.Profiles(a.profiles, painter.desires.names, log)
     if not a.no_benchmark:
         painter.benchmark()
     gpu_pool = ThreadPoolExecutor(max_workers=1)  # one GPU, one frame at a time
     log(f"server: app, live stream and painter on http://localhost:{a.port}/ (stream capped at {a.max_fps:g} fps)")
-    tunnel = None if a.no_tunnel else start_tunnel(a.port)
+    log(f"server: Mirror on http://localhost:{a.port}/mirror.html (works with this PC's own webcam too)")
+    tunnel = None if a.no_tunnel else start_tunnel(a.port, a.qr)
     try:
-        web.run_app(make_app(painter, gpu_pool, a.max_fps), host="0.0.0.0", port=a.port, print=None)
+        web.run_app(make_app(painter, gpu_pool, a.max_fps, profiles), host="0.0.0.0", port=a.port, print=None)
     finally:
+        profiles.save(force=True)
         if tunnel: tunnel.terminate()
 
 
