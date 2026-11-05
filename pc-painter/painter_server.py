@@ -98,19 +98,92 @@ def gpu_name():
     return "unknown GPU"
 
 
-def pick_providers(force_cpu):
+def dxgi_adapters():
+    """Windows graphics adapters in DirectX order. DirectML's device_id is the index in this list, and index 0 is
+    Windows' default adapter, which on laptops with two GPUs is often the slow built-in one."""
+    if platform.system() != "Windows":
+        return []
+    import ctypes
+    from ctypes import wintypes
+
+    class LUID(ctypes.Structure):
+        _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+    class DESC1(ctypes.Structure):
+        _fields_ = [("Description", wintypes.WCHAR * 128), ("VendorId", wintypes.UINT), ("DeviceId", wintypes.UINT),
+                    ("SubSysId", wintypes.UINT), ("Revision", wintypes.UINT), ("DedicatedVideoMemory", ctypes.c_size_t),
+                    ("DedicatedSystemMemory", ctypes.c_size_t), ("SharedSystemMemory", ctypes.c_size_t),
+                    ("AdapterLuid", LUID), ("Flags", wintypes.UINT)]
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD), ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+    def method(obj, index, *argtypes):
+        vtbl = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        return ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, *argtypes)(vtbl[index])
+
+    out = []
+    try:
+        iid = GUID(0x770AAE78, 0xF26F, 0x4DBA, (ctypes.c_ubyte * 8)(0xA8, 0x29, 0x25, 0x3C, 0x83, 0xD1, 0xB3, 0x87))  # IDXGIFactory1
+        factory = ctypes.c_void_p()
+        ctypes.windll.dxgi.CreateDXGIFactory1(ctypes.byref(iid), ctypes.byref(factory))
+        for i in range(16):
+            adapter = ctypes.c_void_p()
+            try:
+                method(factory, 12, wintypes.UINT, ctypes.POINTER(ctypes.c_void_p))(factory, i, ctypes.byref(adapter))  # EnumAdapters1
+            except OSError:
+                break   # DXGI_ERROR_NOT_FOUND: no more adapters
+            d = DESC1()
+            method(adapter, 10, ctypes.POINTER(DESC1))(adapter, ctypes.byref(d))   # GetDesc1
+            out.append({"index": i, "name": d.Description.strip(), "vram_mb": int(d.DedicatedVideoMemory // 2 ** 20),
+                        "vendor": int(d.VendorId), "software": bool(d.Flags & 2)})
+            method(adapter, 2)(adapter)   # Release
+        method(factory, 2)(factory)
+    except Exception as e:
+        log(f"gpu: couldn't list the graphics adapters ({e!r}); using Windows' default one")
+    return out
+
+
+def pick_providers(force_cpu, gpu=None):
+    """Returns (providers for onnxruntime, a name for the GPU)."""
     avail = ort.get_available_providers()
     log(f"gpu: onnxruntime {ort.__version__} offers {', '.join(avail)}")
     if force_cpu:
         log("gpu: --cpu given, using CPU")
-        return ["CPUExecutionProvider"]
+        return ["CPUExecutionProvider"], "CPU"
+    if "DmlExecutionProvider" in avail and "CUDAExecutionProvider" not in avail:
+        adapters = [a for a in dxgi_adapters() if not a["software"]]
+        for a in adapters:
+            log(f"gpu: adapter {a['index']}: {a['name']} ({a['vram_mb']} MB of its own memory)")
+        pick = None
+        if gpu is not None:
+            pick = next((a for a in adapters if a["index"] == gpu), {"index": gpu, "name": f"adapter {gpu}"})
+            log(f"gpu: --gpu {gpu} given: using {pick['name']}")
+        elif adapters:
+            # the dedicated card has by far the most memory of its own; built-in graphics borrow system memory
+            pick = max(adapters, key=lambda a: (a["vram_mb"], a["vendor"] in (0x10DE, 0x1002)))
+            why = "Windows' default" if pick["index"] == 0 else "not Windows' default, which is slower here"
+            log(f"gpu: using adapter {pick['index']}, {pick['name']}: the one with the most memory of its own ({why}). "
+                f"To try another: --gpu N")
+            if pick["vram_mb"] < 1024:
+                log("gpu: WARNING that looks like built-in graphics; expect about 1 frame per second. "
+                    "If this laptop has a separate graphics card, check its driver is installed and the laptop is plugged in.")
+        if pick is not None:
+            return [("DmlExecutionProvider", {"device_id": int(pick["index"])}), "CPUExecutionProvider"], pick["name"]
     for p in ["CUDAExecutionProvider", "DmlExecutionProvider", "CoreMLExecutionProvider", "ROCMExecutionProvider"]:
         if p in avail:
             log(f"gpu: using {p}")
-            return [p, "CPUExecutionProvider"]
+            return [p, "CPUExecutionProvider"], None
     log("gpu: no GPU backend found, falling back to CPU (each frame will take minutes). "
         "On Windows run: pip install onnxruntime-directml   On Linux with NVIDIA: pip install onnxruntime-gpu")
-    return ["CPUExecutionProvider"]
+    return ["CPUExecutionProvider"], "CPU"
+
+
+def session_options():
+    opt = ort.SessionOptions(); opt.log_severity_level = 3
+    opt.enable_mem_pattern = False                          # DirectML requires these two
+    opt.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    return opt
 
 
 def load_embeddings():
@@ -127,13 +200,15 @@ def load_embeddings():
 
 
 class Painter:
-    def __init__(self, providers, motion):
-        opt = ort.SessionOptions(); opt.log_severity_level = 3
+    def __init__(self, providers, motion, gpu=None):
+        opt = session_options()
         t0 = time.time()
+        self.providers = providers
         self.unet = ort.InferenceSession(str(download(*FILES["unet"])), opt, providers=providers)
         self.vae = ort.InferenceSession(str(download(*FILES["vae"])), opt, providers=providers)
         self.provider = self.unet.get_providers()[0]
-        self.gpu = gpu_name() if self.provider != "CPUExecutionProvider" else "CPU"
+        self.gpu = "CPU" if self.provider == "CPUExecutionProvider" else (gpu or gpu_name())
+        self.split = [0.0, 0.0, 0.0]   # recent ms per frame: painting (UNet), decoding (VAE), JPEG
         self.E, self.D, self.order, self.styles = load_embeddings()
         self.motion = motion
         self.noise_cache = OrderedDict()
@@ -149,14 +224,22 @@ class Painter:
         return self.noise_cache[seed]
 
     def _run(self, emb, x):
-        buf = io.BytesIO(); Image.fromarray(self._image(emb, x)).save(buf, format="JPEG", quality=82)
+        img = self._image(emb, x)
+        t0 = time.perf_counter()
+        buf = io.BytesIO(); Image.fromarray(img).save(buf, format="JPEG", quality=82)
+        self.split[2] = self.split[2] * 0.8 + (time.perf_counter() - t0) * 200
         return buf.getvalue()
 
     def _image(self, emb, x):
+        t0 = time.perf_counter()
         sample = (x / np.sqrt(SIGMA ** 2 + 1)).reshape(1, 4, 64, 64).astype(np.float32)
         eps = self.unet.run(None, {"sample": sample, "timestep": np.array([999], np.float32),
                                    "encoder_hidden_states": emb.reshape(1, 77, 768).astype(np.float32)})[0]
+        t1 = time.perf_counter()
         img = self.vae.run(None, {"latent": (x.reshape(1, 4, 64, 64) - SIGMA * eps).astype(np.float32)})[0][0]
+        t2 = time.perf_counter()
+        self.split[0] = self.split[0] * 0.8 + (t1 - t0) * 200
+        self.split[1] = self.split[1] * 0.8 + (t2 - t1) * 200
         return (np.clip(img / 2 + 0.5, 0, 1).transpose(1, 2, 0) * 255).astype(np.uint8)
 
     def _living(self, seed, t, m):
@@ -223,7 +306,8 @@ class Painter:
         fps = 1000 / (sum(times) / len(times))
         self.fps = fps
         feel = "smooth" if fps >= 15 else "watchable" if fps >= 6 else "choppy (a few frames a second)" if fps >= 2 else "a slow slideshow"
-        log(f"painter: about {fps:.1f} frames per second on {self.gpu}, which will look {feel}")
+        log(f"painter: about {fps:.1f} frames per second on {self.gpu}, which will look {feel} "
+            f"(per frame: painting {self.split[0]:.0f} ms, decoding {self.split[1]:.0f} ms, JPEG {self.split[2]:.0f} ms)")
         return fps
 
 
@@ -401,7 +485,9 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                 if now - st["since"] >= 15:
                     dt = now - st["since"]
                     v = sess.viewer
-                    log(f"mirror: {st['frames'] / dt:.1f} fps to {who}, {st['bytes'] / dt / 1024:.0f} KB/s, GPU {ms:.0f} ms/frame; "
+                    u, vd, j = painter.split
+                    log(f"mirror: {st['frames'] / dt:.1f} fps to {who}, {st['bytes'] / dt / 1024:.0f} KB/s, {ms:.0f} ms/frame "
+                        f"(painting {u:.0f}, decoding {vd:.0f}, JPEG {j:.0f}); "
                         f"{sess.edition}, looking: {v.name + f' ({v.taste(sess.space).beats} reactions learned)' if v else 'nobody'}")
                     st.update(frames=0, bytes=0, since=now)
 
@@ -603,6 +689,7 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-tunnel", action="store_true", help="don't open a Cloudflare tunnel")
     ap.add_argument("--cpu", action="store_true", help="force CPU instead of the graphics card")
+    ap.add_argument("--gpu", type=int, default=None, help="Windows: which graphics adapter to use (they're listed at startup)")
     ap.add_argument("--max-fps", type=float, default=24, help="cap the stream's frame rate (default 24)")
     ap.add_argument("--motion", type=float, default=1.0, help="how much the scene gently moves on its own, 0–1 (default 1)")
     ap.add_argument("--no-benchmark", action="store_true", help="skip the startup speed test")
@@ -613,9 +700,10 @@ def main():
     a = ap.parse_args()
     if not (APP_DIR / "index.html").exists():
         raise SystemExit(f"index.html not found in {APP_DIR}; keep this folder inside the moodscape repo")
-    painter = Painter(pick_providers(a.cpu), a.motion)
+    providers, gpu = pick_providers(a.cpu, a.gpu)
+    painter = Painter(providers, a.motion, gpu)
     bliss, unease = mirror_mod.Space(a.bliss, log, "bliss"), mirror_mod.Space(a.unease, log, "unease")
-    bliss.attach_encoder(MODEL_DIR, download, providers=painter.unet.get_providers())
+    bliss.attach_encoder(MODEL_DIR, download, providers=providers)   # same graphics card as the painter
     unease.attach_encoder(MODEL_DIR, download, share=bliss)   # one text encoder on the GPU for both editions
     painter.spaces = {"bliss": bliss, "unease": unease}
     profiles = mirror_mod.Profiles(a.profiles, log)

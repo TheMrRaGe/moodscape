@@ -237,6 +237,8 @@ class Space:
             import onnxruntime as ort
             self.tok = ClipTokenizer(fetch("tokenizer/vocab.json", 1059962), fetch("tokenizer/merges.txt", 524619))
             opt = ort.SessionOptions(); opt.log_severity_level = 3
+            opt.enable_mem_pattern = False                          # DirectML requires these two
+            opt.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
             # an fp16 export: on a CPU one prompt can take most of a minute, on the graphics card a few milliseconds
             self.te = ort.InferenceSession(str(fetch("text_encoder.onnx", 246275486)), opt, providers=list(providers))
         on = self.te.get_providers()[0].replace("ExecutionProvider", "")
