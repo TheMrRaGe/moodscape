@@ -569,7 +569,58 @@ function startAI() {
   ai.loading = loadAI().finally(() => { ai.loading = null; });
   return ai.loading;
 }
+/* PC painter: when the app is opened from the Moodscape PC painter's link, that computer paints instead of the
+   phone. The phone sends the conditioning and noise (numbers only) and gets a JPEG back. */
+// The PC script prints a link ending in #pc=<its tunnel address>; the phone saves that address, so the app keeps
+// one permanent address (and your learned taste) even though the tunnel address changes on every restart.
+const PC_KEY = "moodscape-pc-painter";
+(function pairFromLink() {
+  const m = location.hash.match(/^#pc=(https:\/\/[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?)\/?$/i);
+  if (!m) return;
+  try { localStorage.setItem(PC_KEY, m[1]); } catch {}
+  history.replaceState(null, "", location.pathname + location.search);
+})();
+const savedPc = () => { try { return localStorage.getItem(PC_KEY) || ""; } catch { return ""; } };
+async function probePainter(base) {
+  try {
+    const r = await fetch(base + "api/health", { cache: "no-store", signal: AbortSignal.timeout(3000) });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j && j.painter === "pc" ? { ...j, base } : null;
+  } catch { return null; }
+}
+async function findPcPainter() {
+  if (!/^https?:$/.test(location.protocol)) return null;
+  const same = await probePainter(""); // opened straight from the PC's own link
+  if (same) return same;
+  const saved = savedPc();
+  return saved ? probePainter(saved.replace(/\/?$/, "/")) : null;
+}
+const pcName = (pc) => `${pc.host || "your PC"} (${String(pc.provider).replace("ExecutionProvider", "")})`;
+
+function useRemote(pc) {
+  ai.remote = pc; ai.enabled = true;
+  stage(`painter: using the PC painter on ${pcName(pc)}`);
+  if (!ai.x) {
+    const fav = bestSeed();
+    seedNoise(fav ? fav.seed : newSeed());
+    logLine(fav ? `starting with your favourite layout #${fav.seed} (avg ${sgn(fav.sum / fav.n)})` : `starting with new layout #${ai.seed}`);
+  }
+  ai.ready = true; ai.force = true;
+  $("#btnReroll").disabled = false;
+  aiState("busy", `Painting on ${pcName(pc)}…`);
+}
+
 async function loadAI() {
+  const pc = await findPcPainter();
+  if (pc) return useRemote(pc);
+  if (savedPc()) { // paired with a PC before: never fall back to painting on a phone that may not cope
+    aiState("error", "Your PC painter isn't reachable. Start it on the PC and scan its new QR code. Showing the live sketch until then.");
+    stage("painter: waiting for the PC painter");
+    const retry = async () => { const p = await findPcPainter(); if (p) useRemote(p); else setTimeout(retry, 8000); };
+    setTimeout(retry, 8000);
+    return;
+  }
   try {
     aiState("busy", "Checking WebGPU…");
     stage("painter: checking the GPU");
@@ -679,30 +730,53 @@ async function paint(weights) {
     const learning = canLearn();
     maybeSwitchLayout(weights, learning);
     const { emb, probe } = buildEmbedding(weights, learning);
-    const sample = new Float32Array(N_LAT), c = 1 / Math.sqrt(AI.sigma * AI.sigma + 1);
-    for (let i = 0; i < N_LAT; i++) sample[i] = ai.x[i] * c;
-    const out = await ai.unet.run({
-      sample: new ort.Tensor("float32", sample, [1, 4, 64, 64]),
-      timestep: new ort.Tensor("float32", new Float32Array([999]), [1]),
-      encoder_hidden_states: new ort.Tensor("float32", emb, [1, 77, 768]),
-    });
-    const eps = out[ai.unet.outputNames[0]].data;
-    const latent = new Float32Array(N_LAT);
-    for (let i = 0; i < N_LAT; i++) latent[i] = ai.x[i] - AI.sigma * eps[i];
-    const t1 = performance.now();
-    const img = (await ai.vae.run({ latent: new ort.Tensor("float32", latent, [1, 4, 64, 64]) }))[ai.vae.outputNames[0]].data;
-    const t2 = performance.now();
-    showPainting(img);
-    ai.count++; ai.lastMs = t2 - t0;
+    let timing;
+    if (ai.remote) {
+      const body = new Float32Array(N_EMB + N_LAT);
+      body.set(emb); body.set(ai.x, N_EMB);
+      const r = await fetch(ai.remote.base + "api/paint", { method: "POST", body: body.buffer, headers: { "content-type": "application/octet-stream" }, signal: AbortSignal.timeout(30000) });
+      if (!r.ok) throw new Error(`PC painter answered HTTP ${r.status}`);
+      const [u, v] = (r.headers.get("x-paint-ms") || "").split(",");
+      showBitmap(await createImageBitmap(await r.blob()));
+      ai.lastMs = performance.now() - t0;
+      timing = `PC unet ${u}ms vae ${v}ms · round trip ${ai.lastMs | 0}ms`;
+      aiState("ready", `Painted on ${pcName(ai.remote)} in ${(ai.lastMs / 1000).toFixed(1)} s${learning ? " · watching your reaction" : ""}`);
+    } else {
+      const sample = new Float32Array(N_LAT), c = 1 / Math.sqrt(AI.sigma * AI.sigma + 1);
+      for (let i = 0; i < N_LAT; i++) sample[i] = ai.x[i] * c;
+      const out = await ai.unet.run({
+        sample: new ort.Tensor("float32", sample, [1, 4, 64, 64]),
+        timestep: new ort.Tensor("float32", new Float32Array([999]), [1]),
+        encoder_hidden_states: new ort.Tensor("float32", emb, [1, 77, 768]),
+      });
+      const eps = out[ai.unet.outputNames[0]].data;
+      const latent = new Float32Array(N_LAT);
+      for (let i = 0; i < N_LAT; i++) latent[i] = ai.x[i] - AI.sigma * eps[i];
+      const t1 = performance.now();
+      const img = (await ai.vae.run({ latent: new ort.Tensor("float32", latent, [1, 4, 64, 64]) }))[ai.vae.outputNames[0]].data;
+      const t2 = performance.now();
+      showPainting(img);
+      ai.lastMs = t2 - t0;
+      timing = `unet ${(t1 - t0) | 0}ms vae ${(t2 - t1) | 0}ms`;
+      aiState("ready", `Painted on-device in ${(ai.lastMs / 1000).toFixed(1)} s${learning ? " · watching your reaction" : ""}`);
+    }
+    ai.count++;
     const top = weights.map((w, j) => [ai.order[j], w]).filter(([, w]) => w > 0.05).sort((a, b) => b[1] - a[1]).map(([k, w]) => `${k} ${w.toFixed(2)}`).join(" ");
-    logLine(`paint #${ai.count} layout #${ai.seed} · ${top} · ${learning ? "probing styles" : "using learned styles"} · unet ${(t1 - t0) | 0}ms vae ${(t2 - t1) | 0}ms`);
-    aiState("ready", `Painted on-device in ${(ai.lastMs / 1000).toFixed(1)} s${learning ? " · watching your reaction" : ""}`);
-    if (!journal.ok) { journal.ok = true; stage("running: painting works on this phone"); }
+    logLine(`paint #${ai.count} layout #${ai.seed} · ${top} · ${learning ? "probing styles" : "using learned styles"} · ${timing}`);
+    if (!journal.ok) { journal.ok = true; stage(`running: painting works${ai.remote ? " via the PC" : " on this phone"}`); }
     if (learning) beginReaction({ id: ai.count, weights, probe, seed: ai.seed });
   } catch (e) {
     logLine(`paint failed: ${e.message || e}`);
-    aiState("error", "Painting failed on this device. Showing the live sketch.");
     ai.ready = false;
+    if (ai.remote) {
+      aiState("error", `Lost the PC painter. Is the script still running on ${ai.remote.host || "your PC"}? Retrying…`);
+      const retry = async () => {
+        const p = await findPcPainter();
+        if (p) { useRemote(p); logLine("PC painter is back"); }
+        else setTimeout(retry, 5000);
+      };
+      setTimeout(retry, 3000);
+    } else aiState("error", "Painting failed on this device. Showing the live sketch.");
   } finally {
     ai.lastW = weights; ai.lastAt = performance.now(); ai.busy = false;
   }
@@ -894,6 +968,14 @@ function showPainting(chw) {
     px[i * 4 + 3] = 255;
   }
   back.getContext("2d").putImageData(paintImage, 0, 0);
+  swapPainting();
+}
+function showBitmap(bmp) {
+  back.getContext("2d").drawImage(bmp, 0, 0, 512, 512);
+  bmp.close?.();
+  swapPainting();
+}
+function swapPainting() {
   back.classList.add("front"); front.classList.remove("front");
   [front, back] = [back, front];
   $("#paint").classList.add("on");
@@ -1202,7 +1284,17 @@ let wakeLock = null;
 async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {} }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && wakeLock) keepAwake(); });
 
-(async () => { // tell returning visitors the model is already on the phone
+(async () => { // tell the viewer where painting will happen before they start
+  const pc = await findPcPainter();
+  if (pc) {
+    $("#useAI").closest(".toggle").querySelector("b").textContent = "Paint with your PC";
+    $("#aiNote").textContent = `${pcName(pc)} paints the scenes on its graphics card. Nothing to download on this phone; only numbers are sent to it, never video.`;
+    $("#lowMem").closest(".toggle").hidden = true;
+    lowMem = false; window.__lowMem = false; resize(); // the phone isn't painting, so no need to hold back
+    logLine(`found the PC painter on ${pcName(pc)}`);
+    return;
+  }
+  if (savedPc()) $("#aiNote").textContent = "Paired with your PC painter. Start it on the PC; if its address changed, scan the new QR code it shows.";
   try {
     const c = await caches.open(AI.cache);
     if (await c.match(AI.repo + "unet.onnx")) $("#aiNote").textContent = "The model is already saved on this phone, so it starts without a download. Needs WebGPU.";

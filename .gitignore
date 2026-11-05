@@ -1,1 +1,4 @@
 .models/
+pc-painter/models/
+pc-painter/bin/
+pc-painter/.venv/
