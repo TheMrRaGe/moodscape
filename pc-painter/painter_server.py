@@ -48,6 +48,7 @@ SIGMA = 14.614646911621094
 N_EMB, N_LAT = 77 * 768, 4 * 64 * 64
 BLOCKED = {"pc-painter", ".git", "tools", ".github", ".models"}
 ALLOWED_ORIGIN_SUFFIXES = (".githack.com", ".trycloudflare.com")
+APP_ORIGIN_HOSTS = ("appassets.androidplatform.net",)   # the Moodscape Mirror Android app
 
 
 def log(msg):
@@ -319,7 +320,7 @@ def origin_ok(request):
         return True
     host = (urlparse(origin).hostname or "").lower()
     return (host in ("localhost", "127.0.0.1", request.host.split(":")[0].lower())
-            or host.endswith(ALLOWED_ORIGIN_SUFFIXES) or host in ("raw.githack.com", "rawcdn.githack.com"))
+            or host.endswith(ALLOWED_ORIGIN_SUFFIXES) or host in ("raw.githack.com", "rawcdn.githack.com") or host in APP_ORIGIN_HOSTS)
 
 
 @web.middleware
@@ -672,6 +673,7 @@ def show_link(url, which="moodscape"):
         print("  (pip install qrcode to show a scannable QR code here)", flush=True)
     print(f"\n    {target}\n", flush=True)
     if which == "mirror":
+        print("  In the Moodscape Mirror Android app: tap 'Scan the QR code' and point it here.", flush=True)
         print("  The Mirror is served by this PC, so the link changes each time you restart", flush=True)
         print("  this script; scan the new code then. People it has learned stay on this PC.", flush=True)
         print(f"  Moodscape (mood app) link:  {pair}", flush=True)

@@ -1,119 +1,246 @@
-# Unease: the Mirror edition that keeps what makes you tense up while you keep watching.
-# Eerie, uncanny and liminal, never gore: keep it that way when you edit. (Don't write "no gore" or "no blood"
-# here: CLIP doesn't understand "no", so naming them pulls them in. Leave them out instead.)
+# Unease: the discomfort edition. It keeps whatever makes you squirm while you keep watching: horror (ghosts,
+# creatures, something watching), disgust (insects, rot, clusters of holes), fears (deep water, heights, tight
+# spaces) and the uncanny (things that are almost right). Each person's mirror finds their own.
+# Never gore or graphic violence: keep it that way when you edit. Don't write "no gore" or "no blood" here:
+# CLIP doesn't understand "no", so naming them pulls them in. Leave them out instead.
 # Same format as mirror-bliss.txt.
 
-ending: eerie unsettling atmosphere, highly detailed
+ending: deeply unsettling, dread, highly detailed
+drop: framing, era, texture, palette, time, lighting, detail
 
 [subject]
 Just the place      | (none)
-Red balloon         | a lone red balloon
-Porcelain doll      | a porcelain doll sitting upright
-Mannequins          | a row of mannequins
-Lone door           | a door standing alone with no walls
-Old telephone       | an old telephone off the hook
-Static TV           | a television glowing with static
+Faceless figure     | a pale faceless figure standing still
+Tall shadow         | a tall thin shadow creature with long arms
+Cracked doll        | a porcelain doll with a cracked grinning face
+Woman in white      | a ghostly woman in white with long black hair
+Scarecrow           | a scarecrow with a stitched burlap face
+Hooded figure       | a hooded figure with no face
+Ceiling crawler     | a pale figure crawling across the ceiling
+Wendigo             | a gaunt creature with a deer skull head
+Grinning thing      | a wide grinning face in the darkness
+Ventriloquist dummy | a ventriloquist dummy staring
+Turned mannequin    | a mannequin that has turned its head
+Eye in the keyhole  | an eye looking through a keyhole
+Beast in the trees  | a beast with glowing eyes between the trees
+Clown               | a smiling clown in the shadows
+Crows               | hundreds of crows watching
+Reaching hands      | pale hands reaching out of the darkness
+Cockroaches         | a swarm of cockroaches
+Spiders             | spiders crawling everywhere
+Holes               | a cluster of tiny holes like a lotus seed pod
+Maggots             | rotting fruit crawling with maggots
+Black mold          | black mold creeping over everything
+Thing below         | a huge dark shape beneath you in deep water
+Too many eyes       | dozens of eyes staring
+Smiling mask        | a smiling porcelain mask
+Rabbit mask         | a figure in a rabbit mask
+Plague doctor       | a plague doctor in a beaked mask
+Puppet on strings   | a marionette hanging from tangled strings
+Static TV           | an old television glowing with static
+Ringing phone       | an old telephone ringing in the dark
+Red balloon         | a single red balloon
 Empty swing         | an empty swing still moving
-Stopped clock       | a stopped grandfather clock
-Smiling mask        | a smiling theater mask on the wall
-Distant figure      | a tall silhouette far away
-Rocking chair       | an empty rocking chair
-Carousel horse      | a lone carousel horse
-Staring deer        | a deer standing too still, staring
-Crow                | a crow watching
-Vending machine     | a flickering vending machine
-Birthday cake       | a birthday cake with unlit candles
-Too many chairs     | rows of empty chairs facing a wall
+Rocking chair       | an empty rocking chair rocking
+Wax figures         | melting wax figures
+Taxidermy           | a room of staring taxidermy animals
+Moth swarm          | a swarm of giant moths
+Eel                 | a huge eel in murky water
+Centipede           | a giant centipede
+Leeches             | leeches in dark water
+Jellyfish swarm     | a swarm of translucent jellyfish
+Anglerfish          | an anglerfish with a glowing lure
+Tentacles           | tentacles rising from the water
+Tall man            | an impossibly tall thin man
+Too-wide smile      | a stranger with a smile far too wide
+Doppelganger        | your exact double standing behind you
+Dolls everywhere    | hundreds of old dolls
+Shadow figure       | a shadow figure at the foot of the bed
+Eyes in the dark    | two eyes in the pitch black
+Teeth               | rows of crooked teeth in the dark
+Fleshy roots        | pale twisting roots like veins
+Hive                | a dripping wasp hive
+Snakes              | a tangle of snakes
+Bats                | a cloud of bats
 
 [place]
-Empty mall          | in an empty shopping mall after closing
-Drained pool        | in a drained indoor swimming pool
-Endless office      | in an endless office of empty cubicles
-Motel corridor      | in a motel corridor
-Closed carnival     | in an abandoned carnival
-Bare forest         | in a forest of bare trees
-Flooded basement    | in a flooded basement
-Empty bedroom       | in an empty childs bedroom
-Subway platform     | on an empty subway platform
-Hospital hallway    | in a long hospital hallway
-Cornfield           | in a cornfield
-Deep ocean          | in the deep dark ocean
-Foggy playground    | in a foggy playground
+Haunted house       | in a haunted victorian house
+Asylum              | in an abandoned asylum corridor
+Dark forest         | in a dark forest at night
+Cellar              | in a stone cellar
+Church ruin         | in a ruined church
+Graveyard           | in a foggy graveyard
+Cabin in the woods  | in a cabin deep in the woods
+Old well            | by an old stone well
+Mine tunnel         | in a flooded mine tunnel
+Hospital ward       | in a derelict hospital ward
+Ritual clearing     | in a clearing with a ritual circle of stones
+Attic               | in a dusty attic
+Motel at 3 am       | in an empty motel corridor
+Long hallway        | at the end of a long dark hallway
+Abyss               | in the deep ocean abyss
+Cornfield           | in a cornfield at night
+Subway tunnel       | in a dark subway tunnel
+Lighthouse          | in an abandoned lighthouse
+Carnival            | in an abandoned carnival at night
+Bedroom doorway     | in a dark bedroom doorway
+Crawlspace          | in a narrow crawlspace
+Open water          | in deep dark water far from land
+Skyscraper ledge    | on a ledge high above the city
+Endless rooms       | in endless identical yellow rooms
+Bathroom mirror     | in a bathroom mirror at night
+Empty mall          | in an empty mall after closing
+Drained pool        | in a drained indoor pool
+Endless office      | in an endless empty office
+Sewer               | in a dripping sewer tunnel
+Swamp               | in a black swamp
+Frozen lake         | on a frozen lake at night
+Elevator            | in a stalled elevator
 Parking garage      | in an empty parking garage
-Attic               | in an attic of covered furniture
-Ballroom            | in an abandoned hotel ballroom
-Night highway       | on an empty highway at night
-Laundromat          | in a laundromat at night
-School hallway      | in an empty school hallway
-Identical suburb    | in a suburb of identical houses
-Endless stairs      | on a staircase that never ends
+Laundromat          | in a laundromat at 3 am
+Playground          | in a foggy playground
+Morgue drawers      | in a cold room of steel drawers
+Doll factory        | in an abandoned doll factory
+Catacombs           | in the catacombs
+Flooded house       | in a flooded house
+Collapsed cave      | in a narrow collapsing cave
+Abandoned school    | in an abandoned school
+Greenhouse rot      | in a rotting greenhouse
+Fog bridge          | on a bridge disappearing into fog
+Deep well           | at the bottom of a deep well
+Overgrown village   | in a village swallowed by vines
+Theater             | in an empty theater
+Ship hull           | in the hull of a sunken ship
+Space derelict      | in a derelict spaceship
+Wet basement        | in a wet basement
+Night market        | in an empty night market
 
 [detail]
 Nothing extra       | (none)
-Flickering lights   | with flickering fluorescent lights
+Glowing eyes        | with eyes glowing in the darkness
+Handprints          | with handprints on the glass
+Scratch marks       | with scratch marks on the walls
+Door opening        | with a door slowly creaking open
+Candles             | with guttering candles
+Faces in the walls  | with faces in the wallpaper
+Moths               | with moths swarming
+Black ooze          | with black ooze dripping
+Chains              | with rusted chains hanging
+Broken mirrors      | with broken mirrors
+Thick fog           | with thick fog
+Watcher in window   | with a figure watching from a window
+Cobwebs             | with thick cobwebs
+Shadow wrong        | with a shadow that doesn't match
+Flickering lights   | with flickering lights
 Too many doors      | with far too many doors
 Impossible stairs   | with impossible stairs
-Eyes in the dark    | with eyes glinting in the dark
-Moths               | with moths swarming
-VHS static          | with vhs static
-Long shadows        | with long shadows
-Dripping water      | with dripping water
-Too tall            | where everything is slightly too tall
-Door ajar           | with a door left ajar
-Footprints          | with footprints that suddenly stop
-Red light           | with a faint red light
-Moving curtains     | with curtains moving without wind
-Creeping fog        | with fog creeping along the floor
+Footprints          | with footprints that stop
+Water rising        | with dark water rising
+Swarming flies      | with swarming flies
+Slime               | covered in glistening slime
+Hair                | with long black hair everywhere
+Strings             | with red string tangled everywhere
+Static              | with vhs static
+Peeling wallpaper   | with peeling wallpaper
+Dead flowers        | with dead flowers
+Breathing walls     | with walls that seem to breathe
+Nails               | with rusty nails everywhere
+Stopped clocks      | with stopped clocks
+Child drawings      | with crayon drawings on the walls
+
+[texture]
+As it is            | (none)
+Wax                 | everything slightly melted like wax
+Wet                 | everything wet and dripping
+Rust                | everything rusted
+Mold                | everything furred with mold
+Porcelain           | everything pale porcelain
+Static noise        | everything dissolving into static
+Wrong scale         | everything slightly the wrong size
+Too smooth          | everything uncannily smooth
+Rot                 | everything rotting
+Peeling             | everything peeling
+
+[era]
+Timeless            | (none)
+Victorian           | in the victorian era
+1950s               | in the 1950s
+1970s               | in the 1970s
+1990s               | in the 1990s
+Medieval            | in medieval times
+Far future          | in a dead far future
 
 [time]
 3 am                | at 3 am
-Endless dusk        | at an endless dusk
-Grey noon           | at overcast noon
+Midnight            | at midnight
+Red moon            | under a huge red moon
 Before dawn         | just before dawn
 Eclipse             | during an eclipse
-White sky           | under a white sky with no sun
+Storm night         | on a stormy night
+Grey noon           | at overcast noon
+Endless dusk        | at an endless dusk
 
 [lighting]
-Fluorescent         | buzzing fluorescent light
-Bare bulb           | a single bare bulb
-Camera flash        | harsh camera flash
-Green streetlight   | sickly green streetlight
-Emergency red       | red emergency light
+Flickering bulb     | a single flickering bulb
+Candle from below   | candlelight from below
+Moonlight           | cold moonlight
+Red glow            | a deep red glow
 Flashlight          | a flashlight beam
-Deep shadow         | deep shadow
+Lightning           | a flash of lightning
+Near darkness       | almost total darkness
+Camera flash        | harsh camera flash
+Fluorescent         | buzzing fluorescent light
+Green streetlight   | sickly green streetlight
 TV glow             | the glow of a television
+Emergency red       | red emergency light
 
 [palette]
 Natural             | (none)
-Sickly yellow-green | sickly yellow green
+Sickly green        | sickly green
+Crimson and black   | deep crimson and black
+Cold blue           | cold dark blue
+Rotting sepia       | rotting sepia
 Grey                | desaturated grey
-Crimson             | deep crimson
-Sepia               | washed out sepia
+Pitch black         | pitch black shadows
+Bruised purple      | bruised purple
+Yellow-green        | sickly yellow green
 Clinical white      | cold clinical white
-Murky teal          | murky teal
-Faded pastel        | faded pastel
 Black and white     | stark black and white
 
 [style]
-Liminal photo       | liminal space photograph
-VHS still           | vhs still frame
+Horror film still   | horror movie still
 Found footage       | found footage
-Old polaroid        | old polaroid
-Infrared            | infrared photograph
-Dreamcore           | dreamcore
+VHS horror          | vhs horror tape
 Analog horror       | analog horror
+Dark oil painting   | dark oil painting
+Gothic etching      | gothic engraving
+Creepy polaroid     | old creepy polaroid
+Night vision        | night vision camera
+Trail camera        | trail camera photo
+Dark fantasy        | dark fantasy art
+J-horror            | japanese horror film still
+Liminal photo       | liminal photograph
+Dreamcore           | dreamcore
 Uncanny render      | uncanny 3d render
-Tarnished oil       | tarnished oil painting
 Daguerreotype       | faded daguerreotype
-Surreal painting    | surreal painting
 Security camera     | security camera still
-Film noir           | film noir
+Surreal painting    | surreal painting
+Infrared            | infrared photograph
+Woodcut             | dark woodcut print
+Charcoal            | charcoal drawing
+Cosmic horror       | cosmic horror art
+Creepypasta         | creepypasta image
+Underwater photo    | murky underwater photo
+Macro photo         | macro photograph
 
 [framing]
 Dutch angle         | dutch angle
-Fisheye             | fisheye lens
-From above          | high corner view
-Through a doorway   | seen through a doorway
+Cracked doorway     | seen through a cracked doorway
+From below          | from below
+Over the shoulder   | over the shoulder
+Security camera     | security camera view
 Too close           | uncomfortably close
-Vast and empty      | vast and empty
+Vast darkness       | vast darkness
+Looking down        | looking straight down
+Fisheye             | fisheye lens
 One-point           | symmetrical one point perspective

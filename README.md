@@ -97,9 +97,9 @@ PC:    SDXS one-step painting on the GPU, with a slow drift in noise space so th
 `mirror.html` is a second app, served by the PC painter. Prop your phone up like a small mirror and look into it. Every few seconds it changes one thing about the painting and watches the next second and a half of your face. A change that lands stays; one that doesn't is undone. It comes in two editions:
 
 - **Bliss** keeps what you light up at: a smile that reaches your eyes, wonder, leaning in.
-- **Unease** keeps what makes you tense up *while you keep watching*: furrowed brows, pressed lips, a wrinkled nose, a wince, pulling back. A smile means it isn't working, and leaving means it lost you. It's eerie, uncanny and liminal (empty malls at 3 am, a doll in a motel corridor), never gory. The phone asks before entering it, and **Bliss** at the top takes you back.
+- **Unease** keeps whatever makes you squirm *while you keep watching*. That covers horror (ghosts, creatures, something watching), disgust (insects, rot, clusters of holes), fears (deep water, heights, tight spaces) and the uncanny. Each person's mirror finds their own. It reads fear and discomfort: wide eyes and raised brows, a gasp, pressed or stretched lips, a wrinkled nose, pulling back, a flinch. A smile means it isn't working, and leaving means it lost you. There's no gore or graphic violence. The phone asks before entering it, and **Bliss** at the top takes you back.
 
-Paintings aren't picked from a list. Each one is a choice from every section of `pc-painter/mirror-bliss.txt` or `pc-painter/mirror-unease.txt`: subject, place, detail, time, weather, lighting, palette, style and framing. That's about 8.3 billion Bliss paintings and 223 million Unease ones. Prompts are encoded on the GPU as they're needed.
+Paintings aren't picked from a list. Each one is a choice from every section of `pc-painter/mirror-bliss.txt` or `pc-painter/mirror-unease.txt`. Bliss has subject, place, detail, texture, era, time, weather, lighting, mood, palette, style and framing: about 6.3 quadrillion paintings. Unease has subject, place, detail, texture, era, time, lighting, palette, style and framing: about 1.6 trillion. CLIP reads at most 77 tokens, so when a combination runs long, the painter leaves parts out in each file's `drop:` order until it fits. Prompts are encoded on the GPU as they're needed.
 
 ```
 phone:   camera → MediaPipe expression (~14×/s): smile, brows, eyes, lips, head pose, distance ──► laptop
@@ -128,7 +128,7 @@ You can also try it on the laptop with its own webcam: `http://localhost:8765/mi
 
 Nothing about the viewer goes into a capture.
 
-**What to expect:** in simulation (`python pc-painter/test_mirror_sim.py`), 0 is a random painting and 1 is a viewer's ideal. Bliss climbs from about 0.3 in the first two minutes to 0.6–0.75 after fifteen. Unease is slower and more variable, at 0.3–0.6 after ten minutes. Real faces are noisier than simulated ones.
+**What to expect:** in simulation (`python pc-painter/test_mirror_sim.py`), 0 is a random painting and 1 is a viewer's ideal. With a space this big, it takes a while to find you: Bliss climbs to about 0.5–0.6 after fifteen minutes, and Unease to about 0.3–0.45 after ten. Taste is saved, so each session picks up where the last one left off. Real faces are noisier than simulated ones.
 
 **Change the space:** edit the edition's `.txt` file (sections like `[subject]`, lines like `Label | words for the painter`), then restart. Learned scores are kept by section and label. In Unease, leave unwanted things out rather than writing "no gore": CLIP doesn't understand "no", so naming a thing pulls it in.
 
@@ -136,6 +136,15 @@ Nothing about the viewer goes into a capture.
 - **Face recognition is off unless the viewer ticks the box.** With it off, the mirror belongs to that phone (a random id) and no fingerprint is made.
 - **With it on,** names, fingerprints, tastes and best moments are stored in `pc-painter/profiles.json` on the laptop, which is git-ignored.
 - **Forget** in the People panel deletes a person; deleting the file forgets everyone.
+
+**Android app:** `android/` builds **Moodscape Mirror**, a small app (about 90 KB) that holds the Mirror page and opens it full screen. It asks for the camera when you start, and keeps the screen awake.
+1. Download `moodscape-mirror.apk` from the repo's [Releases](https://github.com/themrrage/moodscape/releases) on the phone.
+2. Open it. Android asks you to allow installs from your browser once.
+3. In the app, tap **Scan the QR code** and point it at the code `mirror-windows.bat` prints, or paste the link.
+
+The app remembers the laptop. When the painter restarts, its link changes: the app notices and asks you to scan again (**People → Change laptop** also does it). The painting still happens on the laptop; the app is the phone's half.
+
+To rebuild after changing `mirror.html`, run `ANDROID_HOME=… android/build.sh <versionCode> <versionName>` (see the top of the script for what it needs). The first build makes a signing key in `android/` (git-ignored). Keep it: Android only installs an update over the old app if it's signed with the same key.
 
 **Notes:**
 - The link changes every time the script restarts, so scan the new QR code then.

@@ -62,6 +62,10 @@ button{font:inherit;color:inherit}
 .card .row2{display:flex;gap:10px;flex-wrap:wrap}
 .card .row2 .btn{flex:1 1 8rem}
 .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+#pairCard{z-index:5;background:rgba(5,6,9,.97)}
+.pair-video{width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px;background:#000;border:1px solid var(--line)}
+.paste{display:flex;gap:8px}
+.paste input{flex:1;min-width:0;min-height:44px;border-radius:12px;border:1px solid var(--line);background:#0c0d12;color:var(--ink);padding:0 12px;font:500 .9rem var(--f-ui)}
 .chip:focus-visible,.btn:focus-visible,.who-name:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 
 /* the mirror */
@@ -175,11 +179,24 @@ pre.log{margin:0;font:400 .66rem/1.55 ui-monospace,"SF Mono",Menlo,Consolas,mono
   <label class="switch" for="learnOn"><input type="checkbox" id="learnOn" checked> Learn from reactions</label>
   <div class="sub">Each person gets their own taste in each edition. Every painting is built from a subject, a place, a detail, the time, weather, light, colours, a style and a framing. In Bliss the bars show what each face lights up at; in Unease, what makes it tense up. Longer means a bigger reaction; fainter means it isn't sure yet. Everything is stored only on your laptop.</div>
   <div id="peopleList" class="sub">Nobody yet.</div>
+  <div class="acts"><button class="chip" id="btnRepair" type="button">Change laptop</button></div>
   <div class="sub"><b>What it's deciding</b></div>
   <pre class="log" id="log"></pre>
 </section>
 
 <div class="toast" id="toast" hidden role="status"></div>
+
+<div class="intro" id="pairCard" hidden>
+  <div class="card" role="dialog" aria-labelledby="pairTitle">
+    <div class="eyebrow">Moodscape Mirror</div>
+    <h1 id="pairTitle">Connect to your laptop</h1>
+    <p id="pairWhy">The paintings are made on your laptop. Start <b>mirror-windows.bat</b> there, then scan the QR code it prints.</p>
+    <video class="pair-video" id="pairVideo" playsinline muted hidden></video>
+    <div class="err" id="pairErr" hidden></div>
+    <button class="btn" id="btnScan" type="button">Scan the QR code</button>
+    <div class="paste"><input id="pairUrl" type="url" inputmode="url" autocomplete="off" placeholder="…or paste the link it printed" aria-label="Laptop link"><button class="btn ghost" id="btnPair" type="button" style="flex:0 0 auto;padding:0 16px">Connect</button></div>
+  </div>
+</div>
 
 <div class="intro" id="uneaseCard" hidden>
   <div class="card" role="dialog" aria-labelledby="uneaseTitle">
@@ -238,11 +255,82 @@ const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
   try { localStorage.setItem(PC_KEY, m[1]); } catch {}
   history.replaceState(null, "", location.pathname + location.search);
 })();
-function painterBase() {
+/* Where the painter is: this page's own origin if the laptop served it, otherwise the address saved when the
+   phone was paired (the Android app, or the page opened from anywhere else). */
+let PAINTER = "";
+function painterBase() { return PAINTER; }
+async function probePainter(base) {
+  try {
+    const r = await fetch(base + "/api/health", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+    const j = await r.json();
+    return j && j.mirror ? base : "";
+  } catch { return ""; }
+}
+async function resolvePainter() {
+  if (/^https?:$/.test(location.protocol) && location.hostname !== "appassets.androidplatform.net") {
+    const same = await probePainter(location.origin);
+    if (same) return same;
+  }
   let saved = ""; try { saved = localStorage.getItem(PC_KEY) || ""; } catch {}
-  if (/^https?:$/.test(location.protocol) && !/github\.io$|githack\.com$/.test(location.hostname)) return location.origin;
   return saved;
 }
+function extractPainter(text) {
+  const t = String(text || "").trim();
+  const m = t.match(/#pc=(https?:\/\/[a-z0-9.-]+(?::\d+)?)/i) || t.match(/[?&]pc=(https?:\/\/[a-z0-9.-]+(?::\d+)?)/i)
+    || t.match(/^(https?:\/\/[a-z0-9.-]+(?::\d+)?)(?:\/|$)/i);
+  return m ? m[1].replace(/\/$/, "") : "";
+}
+function showPair(why) {
+  if (why) $("#pairWhy").textContent = why;
+  $("#pairErr").hidden = true;
+  $("#pairCard").hidden = false;
+}
+async function usePainter(text) {
+  const base = extractPainter(text);
+  const err = (m) => { $("#pairErr").hidden = false; $("#pairErr").textContent = m; };
+  if (!base) return err("That doesn't look like the painter's link. It starts with https:// and ends in trycloudflare.com.");
+  $("#btnPair").disabled = $("#btnScan").disabled = true;
+  const ok = await probePainter(base);
+  $("#btnPair").disabled = $("#btnScan").disabled = false;
+  if (!ok) return err(`Couldn't reach a painter at ${base}. Is mirror-windows.bat still running? Its link changes every time it restarts.`);
+  try { localStorage.setItem(PC_KEY, base); } catch {}
+  PAINTER = base; net.tries = 0;
+  $("#pairCard").hidden = true;
+  logLine(`paired with the painter at ${base}`);
+  try { net.ws?.close(); } catch {}
+  if (!net.ws) connect();
+}
+let scanning = null;
+async function scanQR() {
+  const err = (m) => { $("#pairErr").hidden = false; $("#pairErr").textContent = m; };
+  if (scanning) return;
+  try {
+    if (!window.jsQR) await new Promise((ok, fail) => {
+      const s = document.createElement("script"); s.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
+      s.onload = ok; s.onerror = () => fail(new Error("couldn't load the QR reader")); document.head.appendChild(s);
+    });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+    const v = $("#pairVideo"); v.srcObject = stream; v.hidden = false; await v.play().catch(() => {});
+    $("#btnScan").textContent = "Point it at the QR code…";
+    const c = document.createElement("canvas"), g = c.getContext("2d", { willReadFrequently: true });
+    scanning = setInterval(() => {
+      if (!v.videoWidth) return;
+      c.width = v.videoWidth; c.height = v.videoHeight; g.drawImage(v, 0, 0);
+      const code = window.jsQR(g.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
+      if (code && extractPainter(code.data)) {
+        clearInterval(scanning); scanning = null;
+        stream.getTracks().forEach((t) => t.stop()); v.hidden = true; $("#btnScan").textContent = "Scan the QR code";
+        usePainter(code.data);
+      }
+    }, 200);
+  } catch (e) {
+    scanning = null; $("#btnScan").textContent = "Scan the QR code";
+    err(e?.name === "NotAllowedError" ? "Camera access was blocked. Allow it, or paste the link instead." : `Couldn't scan: ${e.message || e}. Paste the link instead.`);
+  }
+}
+$("#btnScan").onclick = scanQR;
+$("#btnPair").onclick = () => usePainter($("#pairUrl").value);
+$("#pairUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") usePainter(e.target.value); });
 
 /* ---------- Log of decisions (shown in the People sheet) ---------- */
 const log = [];
@@ -259,7 +347,7 @@ const net = { ws: null, open: false, tries: 0, host: "", gpu: "", lastFrame: 0, 
 const paint = $("#paint"), pctx = paint.getContext("2d");
 function connect() {
   const base = painterBase();
-  if (!base) { setState("err", "Open this page from the link your laptop prints when you run mirror-windows.bat."); return; }
+  if (!base) { setState("err", "Not connected to your laptop yet."); showPair(); return; }
   const url = new URL("/api/mirror", base); url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   setState("", `Connecting to your laptop…`);
   let ws;
@@ -275,6 +363,7 @@ function connect() {
   ws.onclose = () => { if (net.ws === ws) { net.open = false; net.ws = null; $("#btnNext").disabled = $("#btnKeep").disabled = true; retry("connection closed"); } };
 }
 function retry(why) {
+  if (net.tries === 2 && $("#pairCard").hidden) showPair(`Can't reach your laptop at ${painterBase()}. If you restarted the painter, its link changed: scan the new QR code.`);
   const wait = Math.min(10000, 1500 * 2 ** net.tries++);
   setState("err", `Can't reach the painter on your laptop (${why}). Is it still running? Retrying in ${Math.round(wait / 1000)} s…`);
   setTimeout(connect, wait);
@@ -432,6 +521,7 @@ function togglePeople(open = $("#people").hidden) {
   if (open) send({ cmd: "people" });
 }
 $("#btnPeople").onclick = () => togglePeople();
+$("#btnRepair").onclick = () => { togglePeople(false); showPair("Scan the QR code your laptop's painter printed, or paste its link."); };
 $("#btnClose").onclick = () => togglePeople(false);
 $("#whoBtn").onclick = () => {
   const pid = lastStatus?.who?.pid; if (!pid) return;
@@ -545,7 +635,7 @@ let wakeLock = null;
 async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {} }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && cam.on) keepAwake(); });
 
-connect();
+resolvePainter().then((base) => { PAINTER = base; connect(); });
 </script>
 </body>
 </html>

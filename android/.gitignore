@@ -1,0 +1,5 @@
+build/
+*.apk
+*.idsig
+moodscape-release.keystore
+keystore.properties

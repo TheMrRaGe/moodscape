@@ -1,7 +1,7 @@
 """
 Moodscape Mirror: a painting that evolves, in real time, toward what the person looking at it reacts to.
 
-Two editions: Bliss keeps what you light up at; Unease keeps what makes you tense up while you keep watching.
+Two editions: Bliss keeps what you light up at; Unease, the horror edition, keeps what frightens you while you keep watching.
 
 The phone is only the eye. It sends face numbers (smile, brows, eyes, head turn, how close you are) about
 14 times a second, and every ~1.3-3 s a 128-number face fingerprint so this laptop knows WHO is looking.
@@ -28,7 +28,7 @@ Everything else happens here:
 Profiles (names, face fingerprints, learned affinities, best moments) are saved in profiles.json next to
 this file. They never leave this laptop. Delete the file to forget everyone, or use "Forget" on the phone.
 """
-import hashlib, html, json, math, os, random, re, threading, time
+import base64, hashlib, html, json, math, os, random, re, threading, time
 from collections import OrderedDict, deque
 from pathlib import Path
 
@@ -68,10 +68,12 @@ EDITIONS = {
         "score": {"smile": 2.2, "cheek": 0.6, "wonder": 1.2, "jaw": 0.4, "frown": -1.6, "browDown": -1.0, "sneer": -2.0, "tension": -0.6},
         "lean": 1.5, "turned": -0.5, "eyes_closed": -0.4,
     },
-    "unease": {  # tensing up while still watching: furrowed brows, a frown, a wrinkled nose, pressed lips, a wince,
-                 # wide alarmed eyes, pulling back, a flinch. A smile means it isn't working. Leaving means it lost you
-        "score": {"frown": 1.2, "browDown": 1.0, "sneer": 1.6, "tension": 1.4, "squint": 0.6, "wonder": 0.6, "smile": -1.5, "cheek": -0.5},
-        "lean": -1.0, "turned": 0.3, "eyes_closed": 0.2,
+    "unease": {  # horror: being frightened while still watching. Fear widens the eyes and raises the brows ("wonder"),
+                 # stretches or presses the lips, drops the jaw in a gasp, wrinkles the nose; you pull back and flinch
+                 # away for a moment. A smile means it isn't working. Leaving entirely means it lost you
+        "score": {"wonder": 1.4, "tension": 1.4, "jaw": 0.5, "sneer": 1.2, "frown": 1.0, "browDown": 0.5, "squint": 0.5,
+                  "smile": -1.5, "cheek": -0.5},
+        "lean": -1.3, "turned": 0.4, "eyes_closed": 0.3,
     },
 }
 AWAY = -0.8              # the face leaving the frame: in either edition, the mirror lost them
@@ -158,7 +160,7 @@ class Space:
     def __init__(self, path, log=_log_default, edition=None):
         self.path, self.log = Path(path), log
         self.edition = edition or self.path.stem.replace("mirror-", "")
-        self.slots, self.labels, self.phrases, self.ending = [], [], [], ""
+        self.slots, self.labels, self.phrases, self.ending, self.drop = [], [], [], "", []
         cur = None
         for raw in self.path.read_text(encoding="utf-8").splitlines():
             line = raw.strip()
@@ -172,6 +174,8 @@ class Space:
                 continue
             if line.lower().startswith("ending:"):
                 self.ending = line.split(":", 1)[1].strip(); continue
+            if line.lower().startswith("drop:"):
+                self.drop = [w.strip().lower() for w in line.split(":", 1)[1].split(",") if w.strip()]; continue
             if cur is None or "|" not in line:
                 continue
             label, phrase = (s.strip() for s in line.split("|", 1))
@@ -186,19 +190,34 @@ class Space:
         self.offsets = np.cumsum([0] + self.sizes[:-1]).tolist()
         self.K = int(sum(self.sizes))
         self.keys = [f"{s}:{l}" for s, labels in zip(self.slots, self.labels) for l in labels]
-        self.cache, self.lock = OrderedDict(), threading.Lock()
+        self.cache, self.lock, self.prompts = OrderedDict(), threading.Lock(), {}
         self.tok = self.te = None
         self.encode_ms = 0.0
         log(f"mirror: {self.edition} has {' x '.join(f'{n} {s}' for s, n in zip(self.slots, self.sizes))} = {math.prod(self.sizes):,} paintings")
 
     # --- text
     def prompt(self, c):
-        words = [self.phrases[j][c[j]] for j in range(len(self.slots))]
-        first = words[0]
-        if len(self.slots) > 1 and self.slots[1] == "detail" and words[1]:
-            first, words = f"{first} {words[1]}", [first] + [""] + words[2:]
-        parts = [first] + [w for w in words[1:] if w] + ([self.ending] if self.ending else [])
-        return ", ".join(p for p in parts if p)
+        """The words for a painting. CLIP reads at most 77 tokens, so if a combination runs long, parts are left
+        out in the file's "drop:" order until it fits (they still count as chosen for learning)."""
+        c = tuple(c)
+        hit = self.prompts.get(c)
+        if hit is not None:
+            return hit
+        words = {s: self.phrases[j][c[j]] for j, s in enumerate(self.slots)}
+
+        def build(skip):
+            return ", ".join([words[s] for s in self.slots if words[s] and s not in skip] + ([self.ending] if self.ending else []))
+        skip, p = set(), build(set())
+        if self.tok is not None:
+            for s in self.drop:
+                if not self.tok(p)[2]:
+                    break
+                if words.get(s):
+                    skip.add(s); p = build(skip)
+            if len(self.prompts) > 20000:
+                self.prompts.clear()
+            self.prompts[c] = p
+        return p
 
     def caption(self, c):
         out = []
@@ -242,12 +261,15 @@ class Space:
             # an fp16 export: on a CPU one prompt can take most of a minute, on the graphics card a few milliseconds
             self.te = ort.InferenceSession(str(fetch("text_encoder.onnx", 246275486)), opt, providers=list(providers))
         on = self.te.get_providers()[0].replace("ExecutionProvider", "")
+        self.prompts.clear()
         worst = max(((self.tok(self.prompt(c))[1], c) for c in self._longest()), key=lambda t: t[0])
-        if worst[0] >= 77:
-            self.log(f"mirror: WARNING the longest combination is cut off at 77 tokens: {self.prompt(worst[1])!r}. Shorten some lines.")
+        if self.tok(self.prompt(worst[1]))[2]:
+            self.log(f"mirror: WARNING even after leaving parts out, the longest combination is cut off at 77 tokens: "
+                     f"{self.prompt(worst[1])!r}. Shorten some lines or add sections to drop:")
         t0 = time.perf_counter(); self.encode(tuple(0 for _ in self.slots)); first = (time.perf_counter() - t0) * 1000
         t0 = time.perf_counter(); self.encode(tuple(min(1, n - 1) for n in self.sizes)); self.encode_ms = (time.perf_counter() - t0) * 1000
-        self.log(f"mirror: {self.edition}: text encoder on {on}: {self.encode_ms:.0f} ms per new painting (first {first:.0f} ms); longest prompt {worst[0]}/77 tokens")
+        self.log(f"mirror: {self.edition}: text encoder on {on}: {self.encode_ms:.0f} ms per new painting (first {first:.0f} ms); "
+                 f"the longest combination fits in {worst[0]}/77 tokens once {', '.join(self.drop) or 'nothing'} may be left out")
         if self.encode_ms > 1500:
             self.log("mirror: WARNING encoding is slow (no graphics card?); the mirror will change much more slowly than intended")
 
@@ -296,7 +318,13 @@ class Taste:
         old = d.get("keys") or []
         if not old:
             return
-        A, b, seen = np.array(d["A"]), np.array(d["b"]), np.array(d.get("seen", [0] * len(old)))
+        if "A_b64" in d:   # upper triangle, float32
+            n = len(old)
+            tri = np.frombuffer(base64.b64decode(d["A_b64"]), np.float32).astype(np.float64)
+            A = np.zeros((n, n)); iu = np.triu_indices(n); A[iu] = tri; A = A + np.triu(A, 1).T
+        else:
+            A = np.array(d["A"])
+        b, seen = np.array(d["b"]), np.array(d.get("seen", [0] * len(old)))
         pos = {k: i for i, k in enumerate(old)}
         keep = [(j, pos[k]) for j, k in enumerate(self.space.keys) if k in pos]   # learned scores are kept by section:label
         if keep:
@@ -306,7 +334,8 @@ class Taste:
     def to_json(self):
         return {"beats": self.beats, "yscale": round(self.yscale, 4), "seeds": {str(k): v for k, v in self.seeds.items()},
                 "moments": self.moments, "keys": self.space.keys,
-                "A": np.round(self.A, 4).tolist(), "b": np.round(self.b, 5).tolist(), "seen": np.round(self.seen, 2).tolist()}
+                "A_b64": base64.b64encode(self.A[np.triu_indices(len(self.b))].astype(np.float32).tobytes()).decode(),
+                "b": np.round(self.b, 5).tolist(), "seen": np.round(self.seen, 2).tolist()}
 
     def mean(self):
         if self._mu is None:
