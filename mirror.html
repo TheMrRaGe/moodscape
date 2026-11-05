@@ -67,7 +67,9 @@ button{font:inherit;color:inherit}
 .mist{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:var(--ink-dim);font:400 1rem/1.5 var(--f-display);transition:opacity 1s}
 
 .foot{justify-self:stretch;display:grid;gap:10px;transition:opacity .4s}
-.caption{text-align:center;font:400 clamp(1.15rem,5.2vw,1.6rem)/1.2 var(--f-display);min-height:1.2em;transition:opacity .7s ease;text-wrap:balance}
+.caption{text-align:center;min-height:2.6em;transition:opacity .7s ease}
+.caption b{display:block;font:400 clamp(1.2rem,5.6vw,1.6rem)/1.2 var(--f-display)}
+.caption small{display:block;margin-top:4px;font:400 .8rem/1.4 var(--f-ui);color:var(--ink-dim);letter-spacing:.02em;text-wrap:balance}
 .caption.fade{opacity:0}
 .line{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .state{display:flex;align-items:center;gap:8px;min-width:0;flex:1;font-size:.74rem;color:var(--ink-dim);font-variant-numeric:tabular-nums}
@@ -153,7 +155,7 @@ pre.log{margin:0;font:400 .66rem/1.55 ui-monospace,"SF Mono",Menlo,Consolas,mono
     <button class="chip" id="btnClose" type="button">Close</button>
   </div>
   <label class="switch" for="learnOn"><input type="checkbox" id="learnOn" checked> Learn from reactions</label>
-  <div class="sub">Each person gets their own taste. Bars show how much their face lights up at each world. A longer bar means a bigger reaction, and a fainter one means it isn't sure yet. Names, face fingerprints and tastes are stored only on your laptop.</div>
+  <div class="sub">Each person gets their own taste. Every painting is built from a place, a detail, a time, weather, colours, a style and a framing, and the mirror learns which of those each face lights up at. Bars show the strongest so far: longer means a bigger reaction, fainter means it isn't sure yet. Names, face fingerprints and tastes are stored only on your laptop.</div>
   <div id="peopleList" class="sub">Nobody yet.</div>
   <div class="sub"><b>What it's deciding</b></div>
   <pre class="log" id="log"></pre>
@@ -163,7 +165,7 @@ pre.log{margin:0;font:400 .66rem/1.55 ui-monospace,"SF Mono",Menlo,Consolas,mono
   <div class="card" role="dialog" aria-labelledby="introTitle">
     <div class="eyebrow">Moodscape</div>
     <h1 id="introTitle">The Mirror</h1>
-    <p>A painting that changes for whoever is looking at it. It recognizes you, watches how your face responds, and drifts toward the worlds that make you light up. The longer you look, the better it knows you.</p>
+    <p>A painting that changes for whoever is looking at it. It recognizes you, and every few seconds it changes something: the place, the light, the weather, the colours, the style. It watches your face: what you warm to stays, what you cool on is undone. The longer you look, the more it becomes yours.</p>
     <p class="fine">The painting is made live on your laptop. This phone sends your laptop only numbers: your expression about 12 times a second, and a face fingerprint (128 numbers) every couple of seconds so it knows who you are. No video or photos leave the phone.</p>
     <div class="err" id="introErr" hidden></div>
     <button class="btn" id="btnStart" type="button">Look into the mirror</button>
@@ -251,7 +253,8 @@ function onJson(text) {
   let d; try { d = JSON.parse(text); } catch { return; }
   if (d.hello) {
     net.host = d.hello.host; net.gpu = d.hello.gpu;
-    logLine(`painting on ${d.hello.host} (${d.hello.gpu}, ${d.hello.provider}) · ${d.hello.worlds.length} worlds`);
+    const sizes = Object.values(d.hello.space || {}).map((l) => l.length);
+    logLine(`painting on ${d.hello.host} (${d.hello.gpu}, ${d.hello.provider}) · ${sizes.reduce((a, b) => a * b, 1).toLocaleString()} possible paintings · new ones encode in ${d.hello.encode_ms} ms`);
   }
   if (d.people) renderPeople(d.people);
   if (d.status) renderStatus(d.status);
@@ -273,18 +276,23 @@ function renderStatus(s) {
     $("#whoSub").textContent = cam.on ? "No one is looking" : "Camera is off";
   }
   $("#whoBtn").disabled = !who;
-  const cap = s.showing.map(([n]) => n).join(" · ");
+  const cap = s.showing.join(" · ");
   if (cap && cap !== lastCaption) {
     const el = $("#caption");
     el.classList.add("fade");
-    setTimeout(() => { el.textContent = cap; el.classList.remove("fade"); }, 450);
+    setTimeout(() => {
+      const [first, ...rest] = s.showing;
+      const b = document.createElement("b"), sm = document.createElement("small");
+      b.textContent = first; sm.textContent = rest.join(" · ");
+      el.replaceChildren(b, sm); el.classList.remove("fade");
+    }, 450);
     lastCaption = cap;
   }
   document.documentElement.style.setProperty("--glow", clamp(s.glow * 1.6).toFixed(2));
   if (s.why && s.why !== lastWhy) { lastWhy = s.why; logLine(s.why); }
   $("#learnOn").checked = s.learning;
   const live = performance.now() - net.lastFrame < 2000;
-  setState(live ? "live" : "", live ? `Live from ${net.host || "your laptop"} · ${s.fps.toFixed(0)} fps` : "Waiting for the first painting…");
+  setState(live ? "live" : "", live ? `Live from ${net.host || "your laptop"} · ${s.fps.toFixed(0)} fps${s.judging ? " · watching your reaction" : ""}` : "Waiting for the first painting…");
   if (!$("#people").hidden && who && who.pid !== peopleFor) { peopleFor = who.pid; send({ cmd: "people" }); }
 }
 function setState(kind, text) { const el = $("#state"); el.className = `state ${kind}`; $("#stateTxt").textContent = text; }
@@ -314,11 +322,11 @@ function renderPeople(list) {
     const max = Math.max(0.05, ...p.top.map((t) => Math.abs(t.score)));
     el.innerHTML = `<div class="top"><div><b></b><br><small></small></div><div class="acts"><button class="chip" data-act="rename" type="button">Rename</button><button class="chip" data-act="forget" type="button">Forget</button></div></div><div class="bars"></div>`;
     el.querySelector("b").textContent = p.name;
-    el.querySelector("small").textContent = `${p.reactions} reactions · ${p.faces} face ${p.faces === 1 ? "view" : "views"}${p.pid === lastStatus?.who?.pid ? " · looking now" : ""}`;
+    el.querySelector("small").textContent = `${p.reactions} reactions · ${p.moments} best moments saved · ${p.faces} face ${p.faces === 1 ? "view" : "views"}${p.pid === lastStatus?.who?.pid ? " · looking now" : ""}`;
     const bars = el.querySelector(".bars");
     if (p.reactions < 10) bars.innerHTML = `<span style="grid-column:1/-1">Still learning what ${p.name} likes.</span>`;
     else for (const t of p.top) {
-      const s = document.createElement("span"); s.textContent = t.world;
+      const s = document.createElement("span"); s.textContent = `${t.item} (${t.slot})`;
       const b = document.createElement("div"); b.className = "bar";
       const i = document.createElement("i");
       i.style.width = `${clamp(t.score / max) * 100}%`; i.style.opacity = 0.35 + 0.65 * clamp(t.sure);

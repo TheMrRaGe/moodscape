@@ -13,7 +13,8 @@ turns those into frames as fast as its GPU allows and streams them back.
     python painter_server.py --qr mirror  # the QR code opens the Mirror instead of Moodscape
 
 Mirror mode (mirror.html + mirror.py): the phone sends face numbers and a face fingerprint; this PC works out
-who is looking, learns what each person lights up at, and streams a painting that melts toward it.
+who is looking, and evolves a painting in real time toward what that person lights up at. Paintings are built
+from mirror-space.txt (about 50 million combinations) and encoded on the GPU as they're needed.
 
 Every decision is printed: GPU backend and name, where the model came from, measured frame rate, each
 phone that connects, and per-connection stream stats.
@@ -170,10 +171,10 @@ class Painter:
         self.fps = 1000 / ms if self.fps == 0 else self.fps * 0.9 + (1000 / ms) * 0.1
         return jpeg, ms
 
-    def frame_mirror(self, weights, seed_a, seed_b, s, t):
-        """One Mirror frame: a blend of worlds, with the layout melting from seed_a to seed_b (s = 0..1)."""
+    def frame_mirror(self, src, dst, m, seed_a, seed_b, s, t):
+        """One Mirror frame: melting from painting src to dst (m = 0..1), and from layout seed_a to seed_b (s = 0..1)."""
         t0 = time.perf_counter()
-        emb = self.desires.embed(weights)
+        emb = dst if m >= 1 else src * (1 - m) + dst * m
         if seed_a == seed_b or s >= 1:
             x = self._living(seed_b, t, self.motion)
         else:  # spherical blend of two noise fields keeps the noise statistics right, so the layout morphs instead of cutting
@@ -315,29 +316,31 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
         await ws.prepare(request)
         who = phone_name(request)
         clock = time.monotonic
-        sess = mirror_mod.MirrorSession(painter.desires, profiles, log=log, who=who)
+        sess = mirror_mod.MirrorSession(painter.space, profiles, log=log, who=who)
         st = {"inflight": 0, "seq": 0, "frames": 0, "since": time.time(), "bytes": 0, "t0": time.time(), "fps": 0.0, "last": 0.0}
         min_gap = 1.0 / max_fps
-        log(f"mirror: {who} connected; {len(profiles.people)} known people, {len(painter.desires.names)} worlds")
+        log(f"mirror: {who} connected; {len(profiles.people)} known people")
 
         async def send_json(obj):
             if not ws.closed:
                 await ws.send_str(json.dumps(obj, separators=(",", ":")))
 
         await send_json({"hello": {"host": platform.node(), "gpu": painter.gpu, "provider": painter.provider.replace("ExecutionProvider", ""),
-                                   "fps": round(painter.fps, 1), "worlds": painter.desires.names}})
+                                   "fps": round(painter.fps, 1), "encode_ms": round(painter.space.encode_ms),
+                                   "space": dict(zip(painter.space.slots, painter.space.labels))}})
         await send_json({"people": sess.people()})
 
         async def render_loop():
             loop = asyncio.get_running_loop()
             last = 0.0
             while not ws.closed:
-                if st["inflight"] >= 2 or time.time() - last < min_gap:
+                # up to 4 frames in flight: over a tunnel each acknowledgement takes a round trip, and 2 capped the stream near 10 fps
+                params = sess.frame_params(clock())
+                if params is None or st["inflight"] >= 4 or time.time() - last < min_gap:
                     await asyncio.sleep(0.004); continue
                 last = time.time()
-                D, sa, sb, s = sess.frame_params(clock())
                 try:
-                    jpeg, ms = await loop.run_in_executor(gpu_pool, painter.frame_mirror, D, sa, sb, s, time.time() - st["t0"])
+                    jpeg, ms = await loop.run_in_executor(gpu_pool, painter.frame_mirror, *params, time.time() - st["t0"])
                 except Exception as e:
                     log(f"mirror: frame failed ({e})"); await asyncio.sleep(0.5); continue
                 if ws.closed: break
@@ -354,11 +357,29 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                         f"looking: {v.name + f' ({v.beats} reactions learned)' if v else 'nobody'}")
                     st.update(frames=0, bytes=0, since=now)
 
+        encoding = {"busy": False}
+
+        async def encode(choice):
+            try:
+                t0 = time.perf_counter()
+                emb = await asyncio.get_running_loop().run_in_executor(gpu_pool, painter.space.encode, choice)
+                painter.space.encode_ms = painter.space.encode_ms * 0.8 + (time.perf_counter() - t0) * 200
+                sess.arrive(choice, emb, clock())
+            except Exception as e:
+                log(f"mirror: encoding a painting failed ({e!r})")
+                await asyncio.sleep(0.5)
+            finally:
+                encoding["busy"] = False
+
         async def control_loop():
             last_status = 0.0
             while not ws.closed:
                 now = clock()
                 try:
+                    want = sess.want()
+                    if want is not None and not encoding["busy"]:   # a new painting: encode its prompt on the GPU, between frames
+                        encoding["busy"] = True
+                        asyncio.create_task(encode(want))
                     sess.tick(now)
                     if now - last_status >= 0.25:
                         last_status = now
@@ -500,14 +521,15 @@ def main():
     ap.add_argument("--motion", type=float, default=1.0, help="how much the scene gently moves on its own, 0–1 (default 1)")
     ap.add_argument("--no-benchmark", action="store_true", help="skip the startup speed test")
     ap.add_argument("--qr", choices=["moodscape", "mirror"], default="moodscape", help="which app the phone QR code opens")
-    ap.add_argument("--worlds", default=str(HERE / "desires.txt"), help="the Mirror's list of worlds")
+    ap.add_argument("--space", default=str(HERE / "mirror-space.txt"), help="the Mirror's sections of options")
     ap.add_argument("--profiles", default=str(HERE / "profiles.json"), help="where the Mirror keeps the people it knows")
     a = ap.parse_args()
     if not (APP_DIR / "index.html").exists():
         raise SystemExit(f"index.html not found in {APP_DIR}; keep this folder inside the moodscape repo")
     painter = Painter(pick_providers(a.cpu), a.motion)
-    painter.desires = mirror_mod.Desires(a.worlds, MODEL_DIR, download, log, providers=painter.unet.get_providers())
-    profiles = mirror_mod.Profiles(a.profiles, painter.desires.names, log)
+    painter.space = mirror_mod.Space(a.space, log)
+    painter.space.attach_encoder(MODEL_DIR, download, providers=painter.unet.get_providers())
+    profiles = mirror_mod.Profiles(a.profiles, painter.space, log)
     if not a.no_benchmark:
         painter.benchmark()
     gpu_pool = ThreadPoolExecutor(max_workers=1)  # one GPU, one frame at a time

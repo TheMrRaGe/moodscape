@@ -1,58 +1,77 @@
 """
-Moodscape Mirror: a painting that shows each person what they light up at.
+Moodscape Mirror: a painting that evolves, in real time, toward what the person looking at it lights up at.
 
 The phone is only the eye. It sends face numbers (smile, brows, eyes, head turn, how close you are) about
-12 times a second, and every ~1.5 s a 128-number face fingerprint so this laptop knows WHO is looking.
+14 times a second, and every ~1.3-3 s a 128-number face fingerprint so this laptop knows WHO is looking.
 Everything else happens here:
 
-    who is it?      fingerprint -> nearest known person (or a new guest after a few unknown reads)
-    what do they    each person has an affinity score per world (desires.txt), learned by Bayesian
-    desire?         linear regression from "what was on screen" -> "how their face responded"
-    what to show?   linger while they light up, wander when they go flat, pick the next world by
-                    Thompson sampling (likely favourites, with honest exploration of the unknown)
-    how to show it  the painting melts continuously toward the chosen mix of worlds; layouts
-                    change by slerping the noise, so nothing ever cuts
+    the space       every painting is one choice per section of mirror-space.txt (place, detail, time,
+                    weather, palette, style, framing): about 50 million paintings, not a fixed list
+    who is it?      fingerprint -> nearest known person, or a new guest after a few unknown reads
+    what do they    an affinity per option, learned by Bayesian linear regression from "what was on
+    desire?         screen 0.7 s ago" -> "how their face responded". Every reaction teaches it about all
+                    seven parts of the painting at once
+    real time       every ~2.5 s it changes one part (guided by Thompson sampling), watches the next
+                    ~1.5 s of your face, and keeps the change if you warmed to it or undoes it if you
+                    cooled. It slows down to let you enjoy what you light up at, and jumps further
+                    when nothing is landing
+    memory          your strongest moments (exact painting + layout) are saved; when it recognizes
+                    you, it opens on your best one
+    how it looks    prompts are encoded on the GPU as needed and the painting melts between them;
+                    layouts change by slerping the noise, so nothing ever cuts
 
-Profiles (names, face fingerprints, learned affinities) are saved in profiles.json next to this file.
-They never leave this laptop. Delete the file to forget everyone, or use "Forget" on the phone.
+Profiles (names, face fingerprints, learned affinities, best moments) are saved in profiles.json next to
+this file. They never leave this laptop. Delete the file to forget everyone, or use "Forget" on the phone.
 """
-import hashlib, html, json, math, os, random, re, time
-from collections import deque
+import hashlib, html, json, math, os, random, re, threading, time
+from collections import OrderedDict, deque
 from pathlib import Path
 
 import numpy as np
 
-HERE = Path(__file__).resolve().parent
 N_EMB = 77 * 768
 
 # ------------------------------------------------------------------ tuning
+# who is looking
 MATCH_DIST = 0.50        # face fingerprints closer than this are the same person (face-api: same person ~0.3-0.45)
 WEAK_DIST = 0.58         # ...and up to this, if it's the person already in front of the mirror
 NEW_AFTER = 3            # unknown reads in a row before a new guest profile is made
 SWITCH_AFTER = 2         # reads in a row naming someone else before the mirror switches person
 LOST_AFTER_S = 4.0       # no face for this long = nobody is looking
-BEAT_S = 1.5             # learning and decisions happen once per beat
-LAG_S = 0.8              # stream latency + human reaction time: a reaction belongs to what was shown this long ago
 WARMUP_SAMPLES = 25      # a new face's resting expression is averaged over this many samples first
-MIN_DWELL_S = 5.0        # a world stays at least this long
-WANDER_S = 12.0          # ...and moves on after this if the face stays flat
-LINGER_MAX_S = 45.0      # ...but lingers up to this while the face keeps lighting up
-ENGAGED = 0.6            # lighting up = smoothed reaction above this many 'typical reactions' for this person
-DISLIKED = -0.6          # below this many = move on early
-BLEND_P = 0.35           # chance a new pick blends in a second world
-MORPH_S = 1.1            # how fast the painting melts toward a new mix (time constant)
-SEED_MORPH_S = 2.2       # how long a layout change takes
-PRIOR_SD = 0.25          # prior spread of a person's affinity for any world (face reactions are small numbers)
-NOISE_SD = 0.4           # how noisy one beat of face reaction is
-EXPLOIT_AT = 300         # after this many reactions, about half the picks go straight to the best-known world
-FORGET = 0.9995          # per-beat decay, so tastes can change over weeks
+# learning
+BEAT_S = 1.0             # the affinity model learns once a second
+LAG_S = 0.7              # stream latency + human reaction time: a reaction belongs to what was on screen this long ago
+PRIOR_SD = 0.25          # prior spread of a person's affinity for one option (face reactions are small numbers)
+NOISE_SD = 0.45          # how noisy one beat of face reaction is
+PAIR_SD = 0.35           # how noisy a before/after comparison of one change is (cleaner: slow drift cancels out)
+FORGET = 0.9997          # per-beat decay, so tastes can change over weeks
+# the real-time loop
+MORPH_S = 0.9            # how long the painting takes to melt into a change
+SEED_MORPH_S = 1.8       # how long a layout change takes
+JUDGE_FROM_S, JUDGE_TO_S = 0.7, 2.2   # after a change lands, the face is judged over this window...
+BEFORE_S = 1.2           # ...against this much time just before it
+STEP_S = 2.6             # time between changes
+SAVOR_S = 6.0            # ...while the person is lighting up, it holds the painting this long instead
+KEEP, UNDO = 0.35, -0.45 # a change is a clear win / loss when the face moves this many "typical reactions"
+JUMP_AFTER = 5           # changes in a row without a win before it jumps further (three parts at once)
+SEED_P = 0.12            # chance a change is a new layout instead of a new part
+EXPLOIT_AT = 150         # after this many beats, about a third of the choices go straight to the best-known option
+# reading the face
 SCORE = {"smile": 2.2, "cheek": 0.6, "wonder": 1.2, "jaw": 0.4, "frown": -1.6, "browDown": -1.0, "sneer": -2.0}
-LEAN_GAIN, AWAY, NOT_FACING, EYES_CLOSED = 1.5, -0.8, -0.5, -0.4
+LEAN_GAIN, AWAY, TURNED, EYES_CLOSED = 1.5, -0.8, -0.5, -0.4
+TURN_YAW, TURN_PITCH = 0.3, 0.35   # head turned / tilted this far from the person's own resting pose = looking elsewhere
 SIGNALS = ["smile", "cheek", "wonder", "jaw", "frown", "browDown", "sneer", "blink", "yaw", "pitch", "size"]
+CAPTION_SLOTS = ("place", "detail", "time", "weather", "style")
 
 
 def _log_default(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
+
+
+def ease(s):
+    s = max(0.0, min(1.0, s))
+    return s * s * (3 - 2 * s)
 
 
 # ------------------------------------------------------------------ CLIP tokenizer (pure Python, no torch/transformers)
@@ -116,112 +135,173 @@ class ClipTokenizer:
         return np.array([ids + [self.eot] * (length - used)], np.int64), used, cut
 
 
-# ------------------------------------------------------------------ the worlds
+# ------------------------------------------------------------------ the space of paintings
 
-def parse_desires(path):
-    style, names, scenes = "", [], []
-    for raw in Path(path).read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.lower().startswith("style:"):
-            style = line.split(":", 1)[1].strip()
-        elif "|" in line:
-            name, scene = (s.strip() for s in line.split("|", 1))
-            if name and scene and name not in names:
-                names.append(name); scenes.append(scene)
-    if len(names) < 2:
-        raise SystemExit(f"mirror: {path} needs at least two worlds (lines like 'Name | what to paint')")
-    return style, names, [f"{s}, {style}" if style else s for s in scenes]
+class Space:
+    """mirror-space.txt: sections of options. A painting ("choice") is one option index per section."""
 
+    def __init__(self, path, log=_log_default):
+        self.path, self.log = Path(path), log
+        self.slots, self.labels, self.phrases, self.ending = [], [], [], ""
+        cur = None
+        for raw in self.path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = re.match(r"^\[\s*([\w -]+?)\s*\]$", line)
+            if m:
+                cur = m.group(1).lower()
+                if cur not in self.slots:
+                    self.slots.append(cur); self.labels.append([]); self.phrases.append([])
+                continue
+            if line.lower().startswith("ending:"):
+                self.ending = line.split(":", 1)[1].strip(); continue
+            if cur is None or "|" not in line:
+                continue
+            label, phrase = (s.strip() for s in line.split("|", 1))
+            j = self.slots.index(cur)
+            if label and phrase and label not in self.labels[j]:
+                self.labels[j].append(label); self.phrases[j].append("" if phrase.lower() == "(none)" else phrase)
+        keep = [j for j, l in enumerate(self.labels) if l]
+        self.slots = [self.slots[j] for j in keep]; self.labels = [self.labels[j] for j in keep]; self.phrases = [self.phrases[j] for j in keep]
+        if not self.slots:
+            raise SystemExit(f"mirror: {self.path} has no sections; it needs [place] and lines like 'Label | words'")
+        self.sizes = [len(l) for l in self.labels]
+        self.offsets = np.cumsum([0] + self.sizes[:-1]).tolist()
+        self.K = int(sum(self.sizes))
+        self.keys = [f"{s}:{l}" for s, labels in zip(self.slots, self.labels) for l in labels]
+        self.cache, self.lock = OrderedDict(), threading.Lock()
+        self.tok = self.te = None
+        self.encode_ms = 0.0
+        log(f"mirror: space has {' x '.join(f'{n} {s}' for s, n in zip(self.slots, self.sizes))} = {math.prod(self.sizes):,} paintings")
 
-class Desires:
-    """The worlds and their CLIP embeddings. Encoded once on this laptop and cached by content hash."""
+    # --- text
+    def prompt(self, c):
+        words = [self.phrases[j][c[j]] for j in range(len(self.slots))]
+        first = words[0]
+        if len(self.slots) > 1 and self.slots[1] == "detail" and words[1]:
+            first, words = f"{first} {words[1]}", [first] + [""] + words[2:]
+        parts = [first] + [w for w in words[1:] if w] + ([self.ending] if self.ending else [])
+        return ", ".join(p for p in parts if p)
 
-    def __init__(self, path, model_dir, fetch, log=_log_default, providers=("CPUExecutionProvider",)):
-        self.path = Path(path)
-        style, self.names, self.prompts = parse_desires(self.path)
-        key = hashlib.sha1(json.dumps(self.prompts).encode()).hexdigest()[:12]
-        cache = Path(model_dir) / f"desires-{key}.npy"
-        if cache.exists():
-            E = np.load(cache)
-            log(f"mirror: {len(self.names)} worlds loaded from {cache.name}")
-        else:
-            log(f"mirror: encoding {len(self.names)} worlds from {self.path.name} (first time, or the list changed)…")
-            import onnxruntime as ort
-            tok = ClipTokenizer(fetch("tokenizer/vocab.json", 1059962), fetch("tokenizer/merges.txt", 524619))
-            opt = ort.SessionOptions(); opt.log_severity_level = 3
-            # the encoder is an fp16 export: on a CPU each prompt can take a minute, on the graphics card a fraction of a second
-            te = ort.InferenceSession(str(fetch("text_encoder.onnx", 246275486)), opt, providers=list(providers))
-            log(f"mirror:   text encoder on {te.get_providers()[0].replace('ExecutionProvider', '')}")
-            out = []
-            for name, prompt in zip(self.names, self.prompts):
-                ids, used, cut = tok(prompt)
-                if cut:
-                    log(f"mirror:   WARNING '{name}' is longer than 77 tokens and was cut off; shorten it in {self.path.name}")
-                out.append(te.run(None, {"input_ids": ids})[0][0])
-                log(f"mirror:   {name:20} {used:2}/77 tokens")
-            E = np.stack(out).astype(np.float16)
-            np.save(cache, E)
-            for old in Path(model_dir).glob("desires-*.npy"):
-                if old != cache:
-                    old.unlink(missing_ok=True)
-            log(f"mirror: worlds encoded and saved as {cache.name}")
-        self.E = E.astype(np.float32).reshape(len(self.names), N_EMB)
+    def caption(self, c):
+        out = []
+        for j, s in enumerate(self.slots):
+            if s in CAPTION_SLOTS and self.phrases[j][c[j]]:
+                out.append(self.labels[j][c[j]])
+        return out or [self.labels[0][c[0]]]
 
-    def embed(self, weights):
-        idx = np.nonzero(weights > 0.004)[0]
-        return weights[idx] @ self.E[idx]
+    def describe(self, c):
+        return " / ".join(f"{s} {self.labels[j][c[j]]}" for j, s in enumerate(self.slots))
+
+    def features(self, c):
+        x = np.zeros(self.K)
+        for j, o in enumerate(c):
+            x[self.offsets[j] + o] = 1.0
+        return x
+
+    def to_labels(self, c):
+        return {s: self.labels[j][c[j]] for j, s in enumerate(self.slots)}
+
+    def from_labels(self, d):
+        try:
+            return tuple(self.labels[j].index(d[s]) for j, s in enumerate(self.slots))
+        except (KeyError, ValueError):
+            return None
+
+    def random(self, rng):
+        return tuple(int(rng.integers(n)) for n in self.sizes)
+
+    # --- embeddings
+    def attach_encoder(self, model_dir, fetch, providers=("CPUExecutionProvider",)):
+        import onnxruntime as ort
+        self.tok = ClipTokenizer(fetch("tokenizer/vocab.json", 1059962), fetch("tokenizer/merges.txt", 524619))
+        opt = ort.SessionOptions(); opt.log_severity_level = 3
+        # an fp16 export: on a CPU one prompt can take most of a minute, on the graphics card a few milliseconds
+        self.te = ort.InferenceSession(str(fetch("text_encoder.onnx", 246275486)), opt, providers=list(providers))
+        on = self.te.get_providers()[0].replace("ExecutionProvider", "")
+        worst = max(((self.tok(self.prompt(c))[1], c) for c in self._longest()), key=lambda t: t[0])
+        if worst[0] >= 77:
+            self.log(f"mirror: WARNING the longest combination is cut off at 77 tokens: {self.prompt(worst[1])!r}. Shorten some lines.")
+        t0 = time.perf_counter(); self.encode(tuple(0 for _ in self.slots)); first = (time.perf_counter() - t0) * 1000
+        t0 = time.perf_counter(); self.encode(tuple(min(1, n - 1) for n in self.sizes)); self.encode_ms = (time.perf_counter() - t0) * 1000
+        self.log(f"mirror: text encoder on {on}: {self.encode_ms:.0f} ms per new painting (first {first:.0f} ms); longest prompt {worst[0]}/77 tokens")
+        if self.encode_ms > 1500:
+            self.log("mirror: WARNING encoding is slow (no graphics card?); the mirror will change much more slowly than intended")
+
+    def _longest(self):
+        idx = []
+        for j in range(len(self.slots)):
+            idx.append(max(range(self.sizes[j]), key=lambda o: len(self.tok.encode(self.phrases[j][o])) if self.tok else len(self.phrases[j][o])))
+        return [tuple(idx)]
+
+    def encode(self, c):
+        p = self.prompt(c)
+        with self.lock:
+            hit = self.cache.get(p)
+            if hit is not None:
+                self.cache.move_to_end(p)
+                return hit.astype(np.float32).ravel()
+        ids, _, _ = self.tok(p)
+        e = self.te.run(None, {"input_ids": ids})[0][0].astype(np.float16)
+        with self.lock:
+            self.cache[p] = e
+            while len(self.cache) > 600:      # ~70 MB of recent paintings
+                self.cache.popitem(last=False)
+        return e.astype(np.float32).ravel()
 
 
 # ------------------------------------------------------------------ people
 
 class Profile:
-    def __init__(self, pid, name, worlds, d=None):
-        n = len(worlds)
-        self.pid, self.name, self.worlds = pid, name, list(worlds)
-        self.exemplars, self.beats, self.seeds = [], 0, {}
-        self.base = None
-        self.yscale = 0.15                                  # typical size of this person's reactions                                    # resting face, per signal
-        self.P0 = np.eye(n) / PRIOR_SD ** 2
-        self.A, self.b = self.P0.copy(), np.zeros(n)
+    def __init__(self, pid, name, space, d=None):
+        self.space, self.pid, self.name = space, pid, name
+        K = space.K
+        self.exemplars, self.beats, self.seeds, self.moments = [], 0, {}, []
+        self.base = None                                    # resting face, per signal
+        self.yscale = 0.15                                  # typical size of this person's reactions
+        self.P0 = np.eye(K) / PRIOR_SD ** 2
+        self.A, self.b, self.seen = self.P0.copy(), np.zeros(K), np.zeros(K)
         self.created = self.last_seen = time.time()
-        self.seen = np.zeros(n)                             # beats each world was on screen (weighted)
         if d:
             self._load(d)
-        self._mu = None
+        self._mu = self._L = None
 
     def _load(self, d):
         self.exemplars = [list(map(float, e)) for e in d.get("exemplars", [])]
-        self.beats, self.base = int(d.get("beats", 0)), d.get("base")
-        self.yscale = float(d.get("yscale", self.yscale))
-        self.seeds = {int(k): v for k, v in d.get("seeds", {}).items()}
+        self.base, self.yscale = d.get("base"), float(d.get("yscale", self.yscale))
         self.created, self.last_seen = d.get("created", self.created), d.get("last_seen", self.last_seen)
-        old = d.get("worlds", [])
-        if old:  # learned scores are kept by world name, so editing desires.txt keeps what still applies
-            A, b, seen = np.array(d["A"]), np.array(d["b"]), np.array(d.get("seen", [0] * len(old)))
-            pos = {w: i for i, w in enumerate(old)}
-            keep = [(j, pos[w]) for j, w in enumerate(self.worlds) if w in pos]
-            if keep:
-                jn, jo = zip(*keep)
-                self.A[np.ix_(jn, jn)], self.b[list(jn)], self.seen[list(jn)] = A[np.ix_(jo, jo)], b[list(jo)], seen[list(jo)]
+        if d.get("version", 1) < 2 or "keys" not in d:   # the first Mirror (fixed worlds): keep who they are, start their taste fresh
+            return
+        self.beats = int(d.get("beats", 0))
+        self.seeds = {int(k): v for k, v in d.get("seeds", {}).items()}
+        self.moments = [m for m in d.get("moments", []) if isinstance(m, dict) and "choice" in m]
+        old = d["keys"]
+        A, b, seen = np.array(d["A"]), np.array(d["b"]), np.array(d.get("seen", [0] * len(old)))
+        pos = {k: i for i, k in enumerate(old)}
+        keep = [(j, pos[k]) for j, k in enumerate(self.space.keys) if k in pos]   # learned scores are kept by section:label
+        if keep:
+            jn, jo = map(list, zip(*keep))
+            self.A[np.ix_(jn, jn)], self.b[jn], self.seen[jn] = A[np.ix_(jo, jo)], b[jo], seen[jo]
 
     def to_json(self):
-        return {"pid": self.pid, "name": self.name, "exemplars": [[round(v, 5) for v in e] for e in self.exemplars],
-                "beats": self.beats, "base": self.base, "yscale": round(self.yscale, 4), "seeds": {str(k): v for k, v in self.seeds.items()},
-                "created": self.created, "last_seen": self.last_seen, "worlds": self.worlds,
-                "A": np.round(self.A, 5).tolist(), "b": np.round(self.b, 5).tolist(), "seen": np.round(self.seen, 2).tolist()}
+        return {"version": 2, "pid": self.pid, "name": self.name, "exemplars": [[round(v, 5) for v in e] for e in self.exemplars],
+                "beats": self.beats, "base": self.base, "yscale": round(self.yscale, 4),
+                "seeds": {str(k): v for k, v in self.seeds.items()}, "moments": self.moments,
+                "created": self.created, "last_seen": self.last_seen, "keys": self.space.keys,
+                "A": np.round(self.A, 4).tolist(), "b": np.round(self.b, 5).tolist(), "seen": np.round(self.seen, 2).tolist()}
 
-    # affinity model: Bayesian linear regression, reaction ≈ Σ_i weight_shown_i · affinity_i
+    # affinity model: Bayesian linear regression, reaction ≈ Σ options on screen · affinity
     def mean(self):
         if self._mu is None:
             self._mu = np.linalg.solve(self.A, self.b)
         return self._mu
 
     def sample(self, rng):
-        cov = np.linalg.inv(self.A)
-        L = np.linalg.cholesky((cov + cov.T) / 2 + 1e-9 * np.eye(len(cov)))
-        return self.mean() + L @ rng.standard_normal(len(cov))
+        if self._L is None:
+            cov = np.linalg.inv(self.A)
+            self._L = np.linalg.cholesky((cov + cov.T) / 2 + 1e-9 * np.eye(len(cov)))
+        return self.mean() + self._L @ rng.standard_normal(len(self.b))
 
     def learn(self, x, y):
         self.A = FORGET * (self.A - self.P0) + self.P0 + np.outer(x, x) / NOISE_SD ** 2
@@ -229,16 +309,52 @@ class Profile:
         self.seen += x
         self.beats += 1
         self.yscale += (abs(y) - self.yscale) * 0.02
-        self._mu = None
+        self._mu = self._L = None
 
-    def confidence(self):
-        return 1 / np.sqrt(np.diag(self.A))   # posterior sd per world
+    def learn_pair(self, dx, d):
+        """A judged change: the face moved by d when the painting changed by dx. Drift in the resting face cancels."""
+        self.A = self.A + np.outer(dx, dx) / PAIR_SD ** 2
+        self.b = self.b + dx * d / PAIR_SD ** 2
+        self._mu = self._L = None
 
-    def top(self, k=5):
-        mu, sd = self.mean(), self.confidence()
-        order = np.argsort(-mu)[:k]
-        return [{"world": self.worlds[i], "score": round(float(mu[i]), 3), "sure": round(float(1 - sd[i] / PRIOR_SD), 2),
-                 "seen": round(float(self.seen[i]), 1)} for i in order]
+    def best_choice(self):
+        mu, sp = self.mean(), self.space
+        return tuple(int(np.argmax(mu[o:o + n])) for o, n in zip(sp.offsets, sp.sizes))
+
+    def remember(self, c, seed, y):
+        """Keep the strongest moments: exact painting + layout, with a running average of reactions."""
+        labels = self.space.to_labels(c)
+        for m in self.moments:
+            if m["choice"] == labels and m["seed"] == seed:
+                m["n"] += 1; m["score"] += (y - m["score"]) / m["n"]; break
+        else:
+            self.moments.append({"choice": labels, "seed": int(seed), "score": round(float(y), 4), "n": 1, "at": int(time.time())})
+        self.moments.sort(key=lambda m: -m["score"])
+        del self.moments[12:]
+
+    def best_moment(self):
+        """The moment to open on: what the model now predicts for it, plus what was actually seen (one lucky
+        reaction alone shouldn't win)."""
+        mu, best = self.mean(), None
+        for m in self.moments:
+            c = self.space.from_labels(m["choice"])
+            if c is not None:
+                v = float(self.space.features(c) @ mu) + m["score"] * m["n"] / (m["n"] + 2)
+                if best is None or v > best[0]:
+                    best = (v, c, m["seed"], m)
+        return best[1:] if best else None
+
+    def top(self, k=6):
+        mu, sd, sp = self.mean(), 1 / np.sqrt(np.diag(self.A)), self.space
+        out = []
+        for i in np.argsort(-mu):
+            slot, label = sp.keys[i].split(":", 1)
+            if sp.phrases[sp.slots.index(slot)][sp.labels[sp.slots.index(slot)].index(label)] == "":
+                continue  # "nothing extra" isn't interesting to list
+            out.append({"slot": slot, "item": label, "score": round(float(mu[i]), 3), "sure": round(float(1 - sd[i] / PRIOR_SD), 2)})
+            if len(out) >= k:
+                break
+        return out
 
     def distance(self, desc):
         if not self.exemplars:
@@ -260,17 +376,21 @@ class Profile:
 
 
 class Profiles:
-    def __init__(self, path, worlds, log=_log_default):
-        self.path, self.worlds, self.log = Path(path), list(worlds), log
+    def __init__(self, path, space, log=_log_default):
+        self.path, self.space, self.log = Path(path), space, log
         self.people, self.dirty, self.saved_at = {}, False, time.time()
         if self.path.exists():
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
+                fresh = 0
                 for d in data.get("people", []):
-                    p = Profile(d["pid"], d["name"], self.worlds, d)
+                    p = Profile(d["pid"], d["name"], space, d)
+                    fresh += p.beats == 0 and d.get("beats", 0) > 0
                     self.people[p.pid] = p
                 log(f"mirror: {len(self.people)} known people loaded from {self.path.name}: "
                     + (", ".join(f"{p.name} ({p.beats} reactions)" for p in self.people.values()) or "none"))
+                if fresh:
+                    log(f"mirror: {fresh} of them came from the first Mirror (fixed worlds): kept their names and faces, their taste starts fresh")
             except Exception as e:
                 bad = self.path.with_suffix(f".broken-{int(time.time())}.json")
                 self.path.replace(bad)
@@ -291,7 +411,7 @@ class Profiles:
         while any(p.name == f"Guest {n}" for p in self.people.values()):
             n += 1
         pid = hashlib.sha1(f"{time.time()}{random.random()}".encode()).hexdigest()[:10]
-        p = Profile(pid, f"Guest {n}", self.worlds)
+        p = Profile(pid, f"Guest {n}", self.space)
         for d in descs:
             p.add_exemplar(d)
         self.people[pid] = p
@@ -306,7 +426,7 @@ class Profiles:
     def room_mean(self):
         """What the room as a whole likes: used when nobody is in front of the mirror."""
         if not self.people:
-            return np.zeros(len(self.worlds))
+            return np.zeros(self.space.K)
         w = np.array([math.sqrt(p.beats + 1) for p in self.people.values()])
         return sum(wi * p.mean() for wi, p in zip(w, self.people.values())) / w.sum()
 
@@ -314,7 +434,7 @@ class Profiles:
         if not (self.dirty or force):
             return
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"version": 1, "people": [p.to_json() for p in self.people.values()]}), encoding="utf-8")
+        tmp.write_text(json.dumps({"version": 2, "people": [p.to_json() for p in self.people.values()]}), encoding="utf-8")
         os.replace(tmp, self.path)
         self.dirty, self.saved_at = False, time.time()
 
@@ -325,46 +445,80 @@ class Profiles:
 
 # ------------------------------------------------------------------ one phone looking into the mirror
 
-def ease(s):
-    return s * s * (3 - 2 * s)
-
-
 class MirrorSession:
-    """All the state for one connected phone. Every method takes `now` (seconds) so it can be simulated."""
+    """All the state for one connected phone. Every method takes `now` (seconds) so it can be simulated.
 
-    def __init__(self, desires, profiles, log=_log_default, seed=None, who="a phone"):
-        self.desires, self.profiles, self.log, self.who = desires, profiles, log, who
-        self.n = len(desires.names)
+    The server asks `want()` for a painting that needs encoding, encodes it on the GPU, and hands it back with
+    `arrive()`; it renders with `frame_params()`."""
+
+    def __init__(self, space, profiles, log=_log_default, seed=None, who="a phone"):
+        self.space, self.profiles, self.log, self.who = space, profiles, log, who
         self.rng = np.random.default_rng(seed)
         self.viewer = None
-        self.face_at = -1e9            # last time a face was seen
-        self.id_reads = deque(maxlen=6)  # recent identity reads: (pid or None, dist, desc)
-        self.samples = deque()         # (t, engagement or None for "away") for the current viewer
-        self.warm = []                 # resting-face samples for a brand-new person
-        self.shown = deque()           # (t, weights on screen)
-        self.D = np.zeros(self.n)      # weights on screen now
-        self.T = np.zeros(self.n)      # where the painting is heading
-        self.t_target, self.reason = 0.0, ""
-        self.seed_a = self.seed_b = int(self.rng.integers(1, 2 ** 31))
-        self.seed_t, self.seed_s = 0.0, 1.0
-        self.next_beat = 0.0
-        self.recent = 0.0              # engagement, smoothed over beats
-        self.last_y = None
-        self.glow = 0.0                # live engagement for the phone's glow
+        self.face_at = -1e9
+        self.id_reads = deque(maxlen=6)    # recent identity reads: (pid or None, dist, desc)
+        self.samples = deque()             # (t, engagement or None for "away") for the current viewer
+        self.warm = []
+        self.shown = deque()               # (t, features on screen)
         self.learning = True
-        self.morph = MORPH_S
         self.events = deque(maxlen=12)
+        self.reason = ""
+        # what's on screen: melting from `src` to `dst`
+        self.src = self.dst = None         # (choice, embedding)
+        self.m_t0 = -1e9
+        self.seed_a = self.seed_b = int(self.rng.integers(1, 2 ** 31))
+        self.seed_t = -1e9
+        # the loop
+        self.pending = None                # (choice, seed or None, kind, why) waiting for its embedding
+        self.change = None                 # the last change, while its reaction is judged
+        self.next_step = 0.0
+        self.misses = 0                    # changes in a row without a win
+        self.recent = 0.0                  # engagement, smoothed over beats
+        self.glow = 0.0
+        self.next_beat = 0.0
         self.last_tick = None
-        self.room_next = 0.0
-        self.room_pick(0.0, first=True)
+        self.room_mode(0.0, "waiting for someone to look")
 
-    # ---------- what the painter needs
+    # ---------- for the server
+    def want(self):
+        return self.pending[0] if self.pending else None
+
+    def arrive(self, choice, emb, now):
+        if not self.pending or self.pending[0] != choice:
+            return
+        _, seed, kind, why = self.pending
+        self.pending = None
+        if self.dst is None:                          # the very first painting
+            self.src = self.dst = (choice, emb)
+        else:
+            self.src = (self.dst[0], self._current_emb(now))
+            self.dst = (choice, emb)
+        self.m_t0 = now
+        if seed is not None and seed != self.seed_b:
+            if now - self.seed_t < SEED_MORPH_S:      # still melting from the last layout: finish from the nearer end
+                self.seed_a = self.seed_b if now - self.seed_t > SEED_MORPH_S / 2 else self.seed_a
+            else:
+                self.seed_a = self.seed_b
+            self.seed_b, self.seed_t = int(seed), now
+        if kind in ("step", "revert") and self.change is not None:
+            self.change["t"] = now
+        self.event(why)
+
+    def _current_emb(self, now):
+        a, b = self.src[1], self.dst[1]
+        m = ease((now - self.m_t0) / MORPH_S)
+        return b if m >= 1 else a * (1 - m) + b * m
+
     def frame_params(self, now):
-        s = ease(min(1.0, (now - self.seed_t) / SEED_MORPH_S)) if self.seed_a != self.seed_b else 1.0
-        return self.D.copy(), self.seed_a, self.seed_b, s
+        if self.dst is None:
+            return None
+        m = ease((now - self.m_t0) / MORPH_S)
+        s = ease((now - self.seed_t) / SEED_MORPH_S) if self.seed_a != self.seed_b else 1.0
+        return self.src[1], self.dst[1], m, self.seed_a, self.seed_b, s
 
-    # ---------- events
-    def event(self, msg, now=None):
+    # ---------- inputs
+    def event(self, msg):
+        self.reason = msg
         self.events.append(msg)
         self.log(f"mirror[{self.who}]: {msg}")
 
@@ -381,7 +535,7 @@ class MirrorSession:
             self.samples.append((now, None)); self.glow *= 0.9
             return
         sig = dict(zip(SIGNALS, s))
-        if v.base is None:  # learn this new face's resting expression first
+        if v.base is None:  # learn this new face's resting expression (and how the phone sees their head) first
             self.warm.append(sig)
             if len(self.warm) >= WARMUP_SAMPLES:
                 v.base = {k: float(np.median([w[k] for w in self.warm])) for k in SIGNALS}
@@ -391,7 +545,7 @@ class MirrorSession:
         e = self.engagement(sig, v.base)
         self.samples.append((now, e))
         self.glow += (e - self.glow) * 0.2
-        a = 0.004  # resting face drifts slowly (lighting, tiredness), so reactions stay relative to today
+        a = 0.0005  # resting face drifts over minutes (lighting, tiredness, how the phone is propped); faster would cancel real reactions
         for k in SIGNALS:
             v.base[k] += (sig[k] - v.base[k]) * a
 
@@ -399,9 +553,9 @@ class MirrorSession:
     def engagement(sig, base):
         e = sum(w * (sig[k] - base[k]) for k, w in SCORE.items())
         e += LEAN_GAIN * max(-0.3, min(0.3, sig["size"] / max(base["size"], 1e-3) - 1))   # leaning in
-        if abs(sig["yaw"]) > 0.35 or abs(sig["pitch"]) > 0.45:
-            e += NOT_FACING
-        if sig["blink"] > 0.6:
+        if abs(sig["yaw"] - base["yaw"]) > TURN_YAW or abs(sig["pitch"] - base["pitch"]) > TURN_PITCH:
+            e += TURNED   # measured from this person's own resting pose, so a phone propped at an angle doesn't count
+        if sig["blink"] > max(0.6, base["blink"] + 0.35):
             e += EYES_CLOSED
         return e
 
@@ -411,10 +565,7 @@ class MirrorSession:
             return
         best, dist = self.profiles.match(desc)
         v = self.viewer
-        if best is not None and (dist < MATCH_DIST or (best is v and dist < WEAK_DIST)):
-            pid = best.pid
-        else:
-            pid = None
+        pid = best.pid if best is not None and (dist < MATCH_DIST or (best is v and dist < WEAK_DIST)) else None
         self.id_reads.append((pid, dist, desc))
         reads = list(self.id_reads)
         if pid is not None and v is not None and pid == v.pid:
@@ -446,20 +597,26 @@ class MirrorSession:
         if self.viewer is not None:
             self.viewer.last_seen = time.time()
         self.viewer = p
-        self.samples.clear(); self.warm = []; self.recent = 0.0; self.last_y = None
-        self.id_reads.clear()
+        self.samples.clear(); self.warm = []; self.recent = 0.0; self.misses = 0
+        self.id_reads.clear(); self.change = None
         self.event(why)
         if p is None:
-            self.room_pick(now, first=True)
+            self.room_mode(now, "showing what the room likes")
             return
         p.last_seen = time.time()
         self.profiles.dirty = True
-        if p.beats >= 20:   # someone it knows: go straight to what they love most
-            i = int(np.argmax(p.mean()))
-            self.set_target(np.eye(self.n)[i], now, f"showing {p.name}'s favourite so far: {self.desires.names[i]}", morph=0.6)
-            self.change_seed(now, self.pick_seed(p, favourite=True))
+        bm = p.best_moment() if p.beats >= 30 else None
+        if p.beats >= 30:   # someone it knows: open on their best moment, or on their favourite parts if it predicts those higher
+            mu, c = p.mean(), p.best_choice()
+            if bm and float(self.space.features(bm[0]) @ mu) + bm[2]["score"] * bm[2]["n"] / (bm[2]["n"] + 2) >= float(self.space.features(c) @ mu):
+                c, seed, m = bm
+                self.request(c, seed, "open", f"{p.name}'s best moment so far (reaction {m['score']:+.2f}): {self.space.describe(c)}")
+            else:
+                self.request(c, self.pick_seed(p, True), "open", f"{p.name}'s favourite parts so far: {self.space.describe(c)}")
         else:
-            self.pick(now, f"getting to know {p.name}", morph=0.8)
+            c = tuple(self.thompson_slot(p.sample(self.rng), j) for j in range(len(self.space.slots)))
+            self.request(c, None, "open", f"getting to know {p.name}: starting with {self.space.describe(c)}")
+        self.next_step = now + STEP_S + 1.0
 
     def command(self, d, now):
         c = d.get("cmd")
@@ -474,160 +631,219 @@ class MirrorSession:
             if p:
                 self.event(f"forgot {p.name} and everything learned about them")
                 if self.viewer is p:
-                    self.viewer = None; self.room_pick(now, first=True)
+                    self.viewer = None; self.room_mode(now, "showing what the room likes")
         elif c == "learn":
             self.learning = bool(d.get("on"))
             self.event("learning " + ("on" if self.learning else "paused"))
         elif c == "next":
-            if self.viewer is not None and self.learning:
-                x = self.window_mean(now - 3.0 - LAG_S, now - LAG_S)
-                if x is not None:
-                    self.viewer.learn(x, -0.3); self.profiles.dirty = True
-            self.pick(now, "you asked for something else (counts as a mild no)")
+            v = self.viewer
+            if v is not None and self.learning and self.dst is not None:
+                v.learn(self.space.features(self.dst[0]), -max(0.04, v.yscale)); self.profiles.dirty = True
+            self.change = None
+            self.jump(now, "you asked for something else (counts as a no for this painting)")
 
     # ---------- the loop
     def tick(self, now):
-        dt = 0.05 if self.last_tick is None else max(0.0, min(0.5, now - self.last_tick))
         self.last_tick = now
         if self.viewer is not None and now - self.face_at > LOST_AFTER_S:
-            self.set_viewer(None, now, f"{self.viewer.name} stepped away; showing what the room likes")
-        # melt toward the target
-        k = 1 - math.exp(-dt / self.morph)
-        self.D += (self.T - self.D) * k
-        self.D[self.D < 0.008] = 0
-        tot = self.D.sum()
-        self.D = self.D / tot if tot > 0 else self.T.copy()
-        self.shown.append((now, self.D.copy()))
+            self.set_viewer(None, now, f"{self.viewer.name} stepped away")
+        if self.dst is not None:
+            m = ease((now - self.m_t0) / MORPH_S)
+            x = self.space.features(self.dst[0]) if m >= 1 else (1 - m) * self.space.features(self.src[0]) + m * self.space.features(self.dst[0])
+            self.shown.append((now, x))
         while self.shown and self.shown[0][0] < now - 8:
             self.shown.popleft()
-        if self.seed_a != self.seed_b and now - self.seed_t >= SEED_MORPH_S:
-            self.seed_a = self.seed_b
+        while self.samples and self.samples[0][0] < now - 12:
+            self.samples.popleft()
         if now >= self.next_beat:
             self.next_beat = now + BEAT_S
             self.beat(now)
+        if self.pending is None and self.dst is not None:
+            if self.viewer is None:
+                if now >= self.next_step:
+                    self.room_step(now)
+            else:
+                self.step(now)
 
-    def window_mean(self, t0, t1):
-        xs = [w for t, w in self.shown if t0 <= t <= t1]
-        return np.mean(xs, axis=0) if xs else None
+    def level(self, t0, t1):
+        """Mean engagement between t0 and t1 (looking away counts against), or None without enough face."""
+        win = [e for t, e in self.samples if t0 <= t <= t1]
+        if len(win) < 4:
+            return None
+        present = [e for e in win if e is not None]
+        away = 1 - len(present) / len(win)
+        return (float(np.mean(present)) if present else 0.0) + AWAY * away
 
     def beat(self, now):
         v = self.viewer
-        if v is None:
-            if now >= self.room_next:
-                self.room_pick(now)
+        if v is None or v.base is None:
             return
-        win = [(t, e) for t, e in self.samples if t > now - BEAT_S]
-        while self.samples and self.samples[0][0] < now - 6:
-            self.samples.popleft()
-        y = None
-        if v.base is not None and len(win) >= 5:
-            present = [e for _, e in win if e is not None]
-            away = 1 - len(present) / len(win)
-            y = (float(np.mean(present)) if present else 0.0) + AWAY * away
-            x = self.window_mean(now - BEAT_S - LAG_S, now - LAG_S)
-            if self.learning and x is not None and away < 0.5:
-                v.learn(x, y)
-                self.profiles.dirty = True
-                if self.seed_a == self.seed_b:   # credit the layout too, once it's fully on screen
-                    s = v.seeds.setdefault(self.seed_b, [0.0, 0])
-                    s[0] += y; s[1] += 1
-            self.recent = 0.5 * self.recent + 0.5 * y
-            self.last_y = y
-        self.decide(now, y)
+        y = self.level(now - BEAT_S, now)
+        if y is None:
+            return
+        self.recent = 0.6 * self.recent + 0.4 * y
+        xs = [x for t, x in self.shown if now - BEAT_S - LAG_S <= t <= now - LAG_S]
+        if self.learning and xs:
+            v.learn(np.mean(xs, axis=0), y)
+            self.profiles.dirty = True
+            settled = now - self.m_t0 > MORPH_S + LAG_S and now - self.seed_t > SEED_MORPH_S + LAG_S
+            if settled:
+                s = v.seeds.setdefault(self.seed_b, [0.0, 0]); s[0] += y; s[1] += 1
+                if y > 1.2 * max(0.04, v.yscale):
+                    v.remember(self.dst[0], self.seed_b, y)
 
-    def decide(self, now, y):
-        v, dwell = self.viewer, now - self.t_target
-        if dwell < MIN_DWELL_S or v.base is None:
-            return
-        unit = max(0.04, v.yscale)   # what counts as a reaction depends on how expressive this face is
-        mu = v.mean()
-        on_fav = int(np.argmax(self.T)) == int(np.argmax(mu)) and v.beats > 60
-        if y is not None and self.recent > ENGAGED * unit and dwell < LINGER_MAX_S:
-            comps = np.nonzero(self.T)[0]
-            if len(comps) > 1:  # deepen: lean the mix toward the part they seem to like more
-                best = comps[np.argmax(mu[comps])]
-                if self.T[best] < 0.9:
-                    self.T[comps] *= 0.9; self.T[best] += 1 - self.T.sum()
-                    self.reason = f"lingering: {v.name} is lighting up, leaning into {self.desires.names[best]}"
-                    self.event(self.reason)
-            return
-        if self.recent < DISLIKED * unit:
-            self.pick(now, f"{v.name} didn't light up at this (reaction {self.recent:+.2f}); moving on")
-        elif dwell > (WANDER_S * 2 if on_fav else WANDER_S):
-            self.pick(now, f"wandering on after {dwell:.0f} s (reaction {self.recent:+.2f})")
-
-    def pick(self, now, why, morph=MORPH_S):
+    def step(self, now):
         v = self.viewer
-        if v is None:
-            a = self.profiles.room_mean() + self.rng.normal(0, 0.08, self.n)
-        elif self.rng.random() < 0.6 * v.beats / (v.beats + EXPLOIT_AT):
-            a, why = v.mean(), why + " (going with what it knows)"
-        else:
-            a = v.sample(self.rng)   # Thompson sampling: plausible favourites, including ones it isn't sure about yet
-        order = np.argsort(-a)
-        T = np.zeros(self.n)
-        if self.rng.random() < BLEND_P:
-            T[order[0]], T[order[1]] = 0.65, 0.35
-        else:
-            T[order[0]] = 1.0
-        same = int(order[0]) == int(np.argmax(self.T)) if self.T.any() else False
-        self.set_target(T, now, why, morph)
-        if same or v is None or self.rng.random() < 0.5:   # a fresh look at the same place, or a new view
-            self.change_seed(now, self.pick_seed(v))
+        if v.base is None:
+            return
+        unit = max(0.04, v.yscale)
+        ch = self.change
+        if ch is not None and "t" in ch:      # judge the last change once its reaction window has passed
+            if now < ch["t"] + JUDGE_TO_S:
+                return
+            after = self.level(ch["t"] + JUDGE_FROM_S, ch["t"] + JUDGE_TO_S)
+            d = None if after is None or ch["before"] is None else (after - ch["before"]) / unit
+            self.change = None
+            if d is None:
+                self.next_step = now + 1.0
+                return
+            if self.learning and ch.get("dx") is not None and np.any(ch["dx"]):
+                v.learn_pair(ch["dx"], after - ch["before"])
+                self.profiles.dirty = True
+            if ch["kind"] == "step" and d < UNDO:
+                self.misses += 1
+                self.request(ch["prev"], ch["prev_seed"], "revert", f"{v.name} cooled on {ch['what']} ({d:+.1f}); undoing it")
+                self.change = {"kind": "revert", "before": self.level(now - BEFORE_S, now), "what": f"going back from {ch['what']}",
+                               "dx": -ch["dx"] if ch.get("dx") is not None else None}
+                self.next_step = now + 0.8
+                return
+            if d > KEEP:
+                self.misses = 0
+                self.event(f"{v.name} warmed to {ch['what']} ({d:+.1f}); keeping it")
+            else:
+                self.misses += 1
+            savor = self.recent > 0.6 * unit
+            self.next_step = now + (SAVOR_S if savor else STEP_S - JUDGE_TO_S)
+            return
+        if ch is not None or now < self.next_step:
+            return
+        if (self.misses >= JUMP_AFTER and self.recent < 0.3 * unit) or self.recent < -0.8 * unit:
+            self.misses = 0
+            self.jump(now, f"nothing's landing for {v.name} (reaction {self.recent / unit:+.1f}); jumping further", undoable=True)
+            return
+        self.mutate(now)
 
-    def set_target(self, T, now, why, morph=MORPH_S):
-        self.T, self.t_target, self.morph = T, now, morph
-        self.recent = 0.0
-        mix = " + ".join(f"{self.desires.names[i]}" + (f" {T[i]:.0%}" if T[i] < 1 else "") for i in np.argsort(-T) if T[i] > 0)
-        self.reason = f"{why} -> {mix}"
-        self.event(self.reason)
+    def thompson_slot(self, a, j, exclude=None):
+        o, n = self.space.offsets[j], self.space.sizes[j]
+        seg = a[o:o + n].copy()
+        if exclude is not None and n > 1:
+            seg[exclude] = -np.inf
+        return int(np.argmax(seg))
+
+    def scores(self, v):
+        if self.rng.random() < 0.6 * v.beats / (v.beats + EXPLOIT_AT):
+            return v.mean(), True
+        return v.sample(self.rng), False   # Thompson sampling: plausible favourites, including ones it isn't sure about yet
+
+    def mutate(self, now):
+        v, sp = self.viewer, self.space
+        cur = self.dst[0]
+        if self.rng.random() < SEED_P:
+            seed = self.pick_seed(v)
+            if seed != self.seed_b:
+                self.begin_change(now, cur, seed, "a new layout", cur)
+                self.request(cur, seed, "step", f"trying a new layout for {v.name}")
+                return
+        a, greedy = self.scores(v)
+        gains = []
+        for j in range(len(sp.slots)):
+            if sp.sizes[j] < 2:
+                gains.append(-np.inf); continue
+            best = self.thompson_slot(a, j, exclude=cur[j])
+            gains.append(a[sp.offsets[j] + best] - a[sp.offsets[j] + cur[j]])
+        g = np.array(gains)
+        if greedy and np.nanmax(g[np.isfinite(g)]) <= 0:   # every part is already its best guess: let them enjoy it
+            self.next_step = now + SAVOR_S
+            self.event(f"holding: this is its best guess for {v.name}")
+            return
+        p = np.exp((g - g.max()) / 0.05); p[~np.isfinite(g)] = 0; p /= p.sum()
+        j = int(self.rng.choice(len(g), p=p))          # most likely the part with the most promising alternative
+        o = self.thompson_slot(a, j, exclude=cur[j])
+        new = cur[:j] + (o,) + cur[j + 1:]
+        what = f"{sp.slots[j]} {sp.labels[j][cur[j]]} -> {sp.labels[j][o]}"
+        self.begin_change(now, cur, None, what, new)
+        self.request(new, None, "step", f"trying {what}" + (" (its best guess)" if greedy else ""))
+
+    def jump(self, now, why, undoable=False):
+        v, sp = self.viewer, self.space
+        cur = self.dst[0] if self.dst else sp.random(self.rng)
+        a = v.sample(self.rng) if v is not None else self.profiles.room_mean() + self.rng.normal(0, 0.1, sp.K)
+        js = self.rng.choice(len(sp.slots), size=min(3, len(sp.slots)), replace=False)
+        new = list(cur)
+        for j in js:
+            new[j] = self.thompson_slot(a, int(j), exclude=cur[j])
+        new = tuple(new)
+        seed = self.pick_seed(v) if v is not None else int(self.rng.integers(1, 2 ** 31))
+        if undoable and self.dst is not None:   # judged like any change, and undone if it lands worse
+            self.begin_change(now, cur, seed, "a jump", new)
+            self.request(new, seed, "step", f"{why} -> {sp.describe(new)}")
+            return
+        self.change = None
+        self.request(new, seed, "jump", f"{why} -> {sp.describe(new)}")
+        self.next_step = now + STEP_S + MORPH_S
+
+    def begin_change(self, now, prev, seed, what, new):
+        dx = self.space.features(new) - self.space.features(prev)
+        self.change = {"kind": "step", "before": self.level(now - BEFORE_S, now), "prev": prev,
+                       "prev_seed": self.seed_b if seed is not None else None, "what": what, "dx": dx}
+
+    def request(self, choice, seed, kind, why):
+        self.pending = (tuple(int(c) for c in choice), seed, kind, why)
 
     def pick_seed(self, v, favourite=False):
         if v is not None and v.seeds:
             total = sum(n for _, n in v.seeds.values()) + 1
             scored = {s: sm / n + (0 if favourite else 0.3 * math.sqrt(math.log(total) / n)) for s, (sm, n) in v.seeds.items() if n}
-            explore = 0.35 / (1 + v.beats / 150)
+            explore = 0.4 / (1 + v.beats / 200)
             if scored and (favourite or (len(scored) >= 3 and self.rng.random() > explore)):
                 return int(max(scored, key=scored.get))
+        if v is not None and len(v.seeds) > 16:   # keep the 16 best layouts
+            v.seeds.pop(min(v.seeds, key=lambda s: v.seeds[s][0] / max(1, v.seeds[s][1])))
         return int(self.rng.integers(1, 2 ** 31))
 
-    def change_seed(self, now, seed):
-        if seed == self.seed_b:
-            return
-        if self.seed_a != self.seed_b:   # still melting from the last layout: finish it from where it is
-            self.seed_a = self.seed_b if now - self.seed_t > SEED_MORPH_S / 2 else self.seed_a
-        self.seed_b, self.seed_t = seed, now
-        v = self.viewer
-        if v is not None and len(v.seeds) > 12:   # keep the 12 best layouts
-            worst = min(v.seeds, key=lambda s: v.seeds[s][0] / max(1, v.seeds[s][1]))
-            if worst != seed:
-                v.seeds.pop(worst)
+    def room_mode(self, now, why):
+        sp = self.space
+        mu = self.profiles.room_mean() + self.rng.normal(0, 0.05, sp.K)
+        c = tuple(self.thompson_slot(mu, j) for j in range(len(sp.slots))) if self.profiles.people else sp.random(self.rng)
+        self.change = None
+        self.request(c, int(self.rng.integers(1, 2 ** 31)), "room", f"nobody's looking: {why} -> {sp.describe(c)}")
+        self.next_step = now + 8.0
 
-    def room_pick(self, now, first=False):
-        self.room_next = now + 18
-        mu = self.profiles.room_mean()
-        cur = int(np.argmax(self.T)) if self.T.any() else -1
-        cands = [int(i) for i in np.argsort(-mu)[:6] if int(i) != cur] if self.profiles.people else [i for i in range(self.n) if i != cur]
-        i = int(self.rng.choice(cands))
-        T = np.zeros(self.n); T[i] = 1
-        self.set_target(T, now, "nobody's looking: drifting through what the room likes" if not first else "waiting for someone to look", morph=2.5)
-        if first and not self.D.any():
-            self.D = T.copy()
-        self.change_seed(now, int(self.rng.integers(1, 2 ** 31)))
+    def room_step(self, now):
+        sp = self.space
+        mu = self.profiles.room_mean() + self.rng.normal(0, 0.08, sp.K)
+        cur = self.dst[0]
+        j = int(self.rng.integers(len(sp.slots)))
+        new = cur[:j] + (self.thompson_slot(mu, j, exclude=cur[j]),) + cur[j + 1:]
+        seed = int(self.rng.integers(1, 2 ** 31)) if self.rng.random() < 0.3 else None
+        self.request(new, seed, "room", f"drifting: {sp.slots[j]} -> {sp.labels[j][new[j]]}")
+        self.next_step = now + 8.0
 
     # ---------- what the phone shows
     def status(self, now):
         v = self.viewer
         looking = now - self.face_at < 1.5
-        showing = [[self.desires.names[i], round(float(self.D[i]), 2)] for i in np.argsort(-self.D)[:3] if self.D[i] > 0.05]
+        c = self.dst[0] if self.dst else None
+        unit = max(0.04, v.yscale) if v else 0.15
         out = {"seeing": "person" if v else ("identifying" if looking else "nobody"),
                "who": {"pid": v.pid, "name": v.name, "reactions": v.beats, "warming": v.base is None} if v else None,
-               "showing": showing, "glow": round(max(-1.0, min(1.0, self.glow)), 2), "recent": round(self.recent, 2),
-               "learning": self.learning, "why": self.reason}
+               "showing": self.space.caption(c) if c else [], "glow": round(max(-1.0, min(1.0, self.glow / (2 * unit))), 2),
+               "recent": round(self.recent / unit, 2), "learning": self.learning, "why": self.reason,
+               "judging": bool(self.change and "t" in self.change and now < self.change["t"] + JUDGE_TO_S)}
         if v is not None:
-            out["top"] = v.top(5)
+            out["top"] = v.top(6)
         return out
 
     def people(self):
-        return [{"pid": p.pid, "name": p.name, "reactions": p.beats, "top": p.top(3), "faces": len(p.exemplars)}
-                for p in sorted(self.profiles.people.values(), key=lambda p: -p.last_seen)]
+        return [{"pid": p.pid, "name": p.name, "reactions": p.beats, "top": p.top(5), "faces": len(p.exemplars),
+                 "moments": len(p.moments)} for p in sorted(self.profiles.people.values(), key=lambda p: -p.last_seen)]
