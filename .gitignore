@@ -6,3 +6,5 @@ pc-painter/profiles.json
 pc-painter/profiles.*.json
 pc-painter/profiles.tmp
 pc-painter/captures/
+pc-painter/status/
+pc-painter/control/

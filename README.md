@@ -102,9 +102,15 @@ PC:    SDXS one-step painting on the GPU, with a slow drift in noise space so th
 Paintings aren't picked from a list. Each one is a choice from every section of `pc-painter/mirror-bliss.txt` or `pc-painter/mirror-unease.txt`. Bliss has subject, place, detail, texture, era, time, weather, lighting, mood, palette, style and framing: about 6.3 quadrillion paintings. Unease has subject, place, detail, texture, era, time, lighting, palette, style and framing: about 1.6 trillion. CLIP reads at most 77 tokens, so when a combination runs long, the painter leaves parts out in each file's `drop:` order until it fits. Prompts are encoded on the GPU as they're needed.
 
 ```
-phone:   camera → MediaPipe expression (~14×/s): smile, brows, eyes, lips, head pose, distance ──► laptop
+phone:   camera → MediaPipe expression (~14×/s): smile, brows, eyes, lips, head pose, distance, gaze,
+                  head motion, blink rate
+                → face-api emotion model (~4×/s): neutral, happy, sad, angry, fearful, disgusted, surprised
+                → heart rate from skin colour (~1×/s, rPPG) with a quality score                      ──► laptop
          (only if the viewer ticks "Recognize faces": a face-api fingerprint every 1.3–3 s)
 laptop:  who is it?      a known fingerprint, a new "Guest", or, with recognition off, simply this phone
+         reading them    every signal as "how far from this person's normal" (a z-score against their own
+                         running range), weighted into one reaction; the weights are learned per person
+                         and edition from their Love / Skip / Keep taps
          the loop        every ~2.6 s: change one part (Thompson sampling over what it has learned), let it
                          melt in, compare the face 0.7–2.2 s later with just before: keep or undo
                          · reacting strongly → hold longer · nothing landing → change three parts at once
@@ -120,6 +126,23 @@ laptop:  who is it?      a known fingerprint, a new "Guest", or, with recognitio
 3. Hold still for a couple of seconds while it learns your resting face. With recognition on, it meets you as "Guest 1"; tap the name to rename yourself.
 
 You can also try it on the laptop with its own webcam: `http://localhost:8765/mirror.html`.
+
+**How it reads you:** every signal is measured against your own normal range, so a subtle face and an expressive one read alike. The signals are:
+- **Expression:** smile, smile lines, raised brows and wide eyes, open mouth, frown, furrowed brows, wrinkled nose, tight lips, wincing, leaning in or pulling back.
+- **Attention:** looking away (by head pose or eyes), going still, blink rate, closing your eyes.
+- **The emotion model's seven feelings.**
+- **Your pulse:** read from the camera. It's used only when the reading is clean (quality 0.4 or higher); in tests, no reading at that quality was wrong.
+
+Each edition starts from sensible defaults (in Bliss, a smile means yes; in Unease, a smile means it isn't working). Then it learns **your** tells. **Double-tap the mirror** when you love what you see, tap **Skip** when you don't, and **Keep** counts as a yes. Each tap teaches it what your face looked like just before you decided. The People panel shows what it has learned, e.g. "raised brows / wide eyes = yes". A Love also holds the painting, saves it as a best moment and counts strongly for every part of it. Someone new starts from what everyone else reacts to, instead of from scratch.
+
+In `python pc-painter/test_face_calibration.py`, a simulated person raises their eyebrows when they like something and smirks when they don't. The defaults read that backwards, and the mirror drifted to −0.54 (worse than random). With occasional taps it learned "eyebrows up = yes" and climbed to +0.46. `node tools/test_heart_rate.js` checks the pulse reader on synthetic skin colour.
+
+**Let Claude run it (the Mirror agent):** double-click **`pc-painter/mirror-agent.bat`** instead of `mirror-windows.bat`. It starts the painter and keeps it running, and lets anything with access to the folder (such as Claude in the desktop app) start, stop or restart it by writing one line to `pc-painter/control/command.txt`. The accepted commands are `start`, `stop`, `restart` and `status`, plus a few safe painter options such as `--gpu 1` or `--max-fps 15`; anything else is refused. It also lets Claude pick up the QR code and read the log:
+- The painter's output goes to `pc-painter/status/painter.log`.
+- When its link is up, the painter saves `status/qr.png` and `status/link.json`.
+- `mirror-agent.bat autostart` also makes it start, minimized, whenever you log in.
+
+Closing its window stops everything.
 
 **Keep:** tap **Keep** to save what's on screen in `pc-painter/captures/<edition>-<date>-<time>-<place>/`. Each capture holds:
 - `still.png`
@@ -144,7 +167,7 @@ Nothing about the viewer goes into a capture.
 
 The app remembers the laptop. When the painter restarts, its link changes: the app notices and asks you to scan again (**People → Change laptop** also does it). The painting still happens on the laptop; the app is the phone's half.
 
-To rebuild after changing `mirror.html`, run `ANDROID_HOME=… android/build.sh <versionCode> <versionName>` (see the top of the script for what it needs). The first build makes a signing key in `android/` (git-ignored). Keep it: Android only installs an update over the old app if it's signed with the same key.
+To rebuild after changing `mirror.html`, run `ANDROID_HOME=… bash android/build.sh <versionCode> <versionName>` (see the top of the script for what it needs). The first build makes a signing key in `android/` (git-ignored). Keep it: Android only installs an update over the old app if it's signed with the same key.
 
 **Notes:**
 - The link changes every time the script restarts, so scan the new QR code then.

@@ -41,7 +41,8 @@ class Person:
         self.best = sum(self.p[o:o + n].max() for o, n in zip(SP.offsets, SP.sizes))
         self.rand = sum(self.p[o:o + n].mean() for o, n in zip(SP.offsets, SP.sizes))
         self.face = rng.normal(0, 0.055, 128)
-        self.base = dict(smile=0.08, cheek=0.1, wonder=0.5, jaw=0.1, frown=0.05, browDown=0.06, sneer=0.03, blink=0.15, yaw=0.44, pitch=-0.14, size=0.4)
+        self.base = dict(smile=0.08, cheek=0.1, wonder=0.5, jaw=0.1, frown=0.05, browDown=0.06, sneer=0.03, blink=0.15, yaw=0.44, pitch=-0.14, size=0.4,
+                         tension=0.05, squint=0.1, gazeH=0.05, gazeV=-0.1, motion=0.012, blinkRate=16.0)
         self.react, self.noise = react, noise   # react: how expressive this face is; yaw 0.44: phone propped at an angle
 
     def score(self, x):
@@ -59,13 +60,14 @@ class Person:
         s["browDown"] += max(0, -r) * 0.12
         s["size"] *= 1 + 0.06 * r
         s["yaw"] += self.rng.normal(0, 0.08)
-        s.setdefault("tension", 0.05); s.setdefault("squint", 0.1)
+        s["motion"] = max(0.0, s["motion"] + self.rng.normal(0, 0.004))
+        s["gazeH"] += self.rng.normal(0, 0.05); s["gazeV"] += self.rng.normal(0, 0.05)
         return [float(s[k]) for k in M.SIGNALS]
 
     def uneasy_signals(self, unsettled):
         """In the Unease edition: unsettled -> tense lips, furrowed brow, wrinkled nose, pulling back; bored -> a little smile."""
         r = unsettled * self.react + self.rng.normal(0, self.noise)
-        s = dict(self.base); s.setdefault("tension", 0.05); s.setdefault("squint", 0.1)
+        s = dict(self.base)
         s["tension"] += max(0, r) * 0.2 + self.rng.normal(0, 0.03)
         s["browDown"] += max(0, r) * 0.15
         s["frown"] += max(0, r) * 0.1 + self.rng.normal(0, 0.02)
@@ -73,6 +75,7 @@ class Person:
         s["smile"] += max(0, -r) * 0.12 + self.rng.normal(0, 0.03)
         s["size"] *= 1 - 0.05 * r
         s["yaw"] += self.rng.normal(0, 0.08)
+        s["motion"] = max(0.0, s["motion"] + self.rng.normal(0, 0.004))
         return [float(s[k]) for k in M.SIGNALS]
 
 

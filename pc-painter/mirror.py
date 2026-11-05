@@ -62,23 +62,42 @@ KEEP, UNDO = 0.35, -0.45 # a change is a clear win / loss when the face moves th
 JUMP_AFTER = 5           # changes in a row without a win before it jumps further (three parts at once)
 SEED_P = 0.12            # chance a change is a new layout instead of a new part
 EXPLOIT_AT = 150         # after this many beats, about a third of the choices go straight to the best-known option
-# reading the face: what counts as a reaction in each edition
+# reading the face
+# The phone sends expression numbers (~14/s), the emotion model's 7 probabilities (~4/s) and a heart rate read from
+# skin colour (~1/s). Each is turned into "how far from this person's normal" (a z-score against their own running
+# mean and spread), so a subtle face and an expressive one read the same. A reaction is a weighted sum of those.
+# The weights start from the edition's defaults below and are then learned per person from their Love / Skip /
+# Keep taps: the mirror learns which of THEIR expressions mean yes and no.
+SIGNALS = ["smile", "cheek", "wonder", "jaw", "frown", "browDown", "sneer", "blink", "yaw", "pitch", "size", "tension", "squint",
+           "gazeH", "gazeV", "motion", "blinkRate"]
+EMOTIONS = ["neutral", "happy", "sad", "angry", "fearful", "disgusted", "surprised"]
+FEATS = ["smile", "cheek", "wonder", "jaw", "frown", "browDown", "sneer", "tension", "squint", "lean", "offscreen",
+         "stillness", "blinkRate", "eyesClosed"] + EMOTIONS + ["arousal"]
+SD_FLOOR = {"smile": 0.03, "cheek": 0.03, "wonder": 0.03, "jaw": 0.03, "frown": 0.02, "browDown": 0.03, "sneer": 0.02,
+            "blink": 0.05, "yaw": 0.05, "pitch": 0.05, "size": 0.01, "tension": 0.02, "squint": 0.03, "gazeH": 0.05,
+            "gazeV": 0.05, "motion": 0.004, "blinkRate": 3.0, "hr": 3.0, **{e: 0.04 for e in EMOTIONS}}
 EDITIONS = {
-    "bliss": {   # lighting up: smiles that reach the eyes, wonder, leaning in. Frowns, disgust, looking away count against
-        "score": {"smile": 2.2, "cheek": 0.6, "wonder": 1.2, "jaw": 0.4, "frown": -1.6, "browDown": -1.0, "sneer": -2.0, "tension": -0.6},
-        "lean": 1.5, "turned": -0.5, "eyes_closed": -0.4,
+    "bliss": {   # lighting up: a smile that reaches the eyes, wonder, leaning in, happy/surprised, absorbed attention
+        "w": {"smile": 0.45, "cheek": 0.2, "wonder": 0.15, "jaw": 0.05, "frown": -0.3, "browDown": -0.15, "sneer": -0.3,
+              "tension": -0.1, "squint": 0.0, "lean": 0.2, "offscreen": -0.5, "stillness": 0.1, "blinkRate": -0.05,
+              "eyesClosed": -0.3, "neutral": -0.05, "happy": 0.35, "sad": -0.2, "angry": -0.15, "fearful": -0.1,
+              "disgusted": -0.25, "surprised": 0.1, "arousal": 0.1},
     },
-    "unease": {  # horror: being frightened while still watching. Fear widens the eyes and raises the brows ("wonder"),
-                 # stretches or presses the lips, drops the jaw in a gasp, wrinkles the nose; you pull back and flinch
-                 # away for a moment. A smile means it isn't working. Leaving entirely means it lost you
-        "score": {"wonder": 1.4, "tension": 1.4, "jaw": 0.5, "sneer": 1.2, "frown": 1.0, "browDown": 0.5, "squint": 0.5,
-                  "smile": -1.5, "cheek": -0.5},
-        "lean": -1.3, "turned": 0.4, "eyes_closed": 0.3,
+    "unease": {  # being unsettled while still watching: fear widens the eyes and raises the brows ("wonder"), presses or
+                 # stretches the lips, drops the jaw, wrinkles the nose; you pull back, freeze, your pulse rises.
+                 # A smile means it isn't working; leaving entirely means it lost you
+        "w": {"smile": -0.35, "cheek": -0.1, "wonder": 0.3, "jaw": 0.1, "frown": 0.2, "browDown": 0.1, "sneer": 0.3,
+              "tension": 0.3, "squint": 0.15, "lean": -0.25, "offscreen": 0.1, "stillness": 0.15, "blinkRate": 0.1,
+              "eyesClosed": 0.1, "neutral": -0.1, "happy": -0.35, "sad": 0.05, "angry": 0.05, "fearful": 0.4,
+              "disgusted": 0.35, "surprised": 0.2, "arousal": 0.35},
     },
 }
-AWAY = -0.8              # the face leaving the frame: in either edition, the mirror lost them
-TURN_YAW, TURN_PITCH = 0.3, 0.35   # head turned / tilted this far from the person's own resting pose = looking elsewhere
-SIGNALS = ["smile", "cheek", "wonder", "jaw", "frown", "browDown", "sneer", "blink", "yaw", "pitch", "size", "tension", "squint"]
+CALIB_SD = 0.3           # how far a person's learned weights may stray from the defaults without much evidence
+CALIB_NOISE = 0.7        # how noisy one Love/Skip label is
+LABEL_FROM_S, LABEL_TO_S = 2.5, 0.3   # a tap is explained by the face over this window before it
+AWAY = -1.0              # the face leaving the frame: in either edition, the mirror lost them
+HR_MIN_Q = 0.4           # camera heart-rate readings below this quality are ignored (in tests, wrong or pulse-less readings stay under ~0.37)
+TURN_YAW, TURN_PITCH, GAZE_OFF = 0.3, 0.35, 0.4   # head turned / tilted, or eyes pointed, this far from rest = looking elsewhere
 CAPTION_SLOTS = ("subject", "place", "detail", "time", "weather", "style")
 
 
@@ -301,18 +320,33 @@ class Taste:
     """What one person reacts to in one edition: an affinity per option (Bayesian linear regression,
     reaction ≈ Σ options on screen · affinity), their best moments, and their favourite layouts."""
 
-    def __init__(self, space, d=None):
+    def __init__(self, space, d=None, prior=None):
         self.space, K = space, space.K
         self.beats, self.seeds, self.moments = 0, {}, []
+        self.labels = 0                                     # Love / Skip / Keep taps learned from
+        w0 = np.array([EDITIONS.get(space.edition, EDITIONS["bliss"])["w"].get(f, 0.0) for f in FEATS])
+        self.cP0 = np.eye(len(FEATS)) / CALIB_SD ** 2
+        self.cA, self.cb, self.w0 = self.cP0.copy(), self.cP0 @ w0, w0
         self.yscale = 0.15                                  # typical size of this person's reactions in this edition
         self.P0 = np.eye(K) / PRIOR_SD ** 2
         self.A, self.b, self.seen = self.P0.copy(), np.zeros(K), np.zeros(K)
+        if prior is not None and not d:   # a new taste starts from what others in the room react to (at half strength)
+            self.b = self.P0 @ (0.5 * prior)
         if d:
             self._load(d)
-        self._mu = self._L = None
+        self._mu = self._L = self._w = None
 
     def _load(self, d):
         self.beats, self.yscale = int(d.get("beats", 0)), float(d.get("yscale", self.yscale))
+        cal = d.get("calib")
+        if cal and cal.get("feats"):   # learned face weights, kept by feature name
+            pos = {f: i for i, f in enumerate(cal["feats"])}
+            keep = [(j, pos[f]) for j, f in enumerate(FEATS) if f in pos]
+            if keep:
+                jn, jo = map(list, zip(*keep))
+                cA, cb = np.array(cal["A"]), np.array(cal["b"])
+                self.cA[np.ix_(jn, jn)], self.cb[jn] = cA[np.ix_(jo, jo)], cb[jo]
+            self.labels = int(cal.get("labels", 0))
         self.seeds = {int(k): v for k, v in d.get("seeds", {}).items()}
         self.moments = [m for m in d.get("moments", []) if isinstance(m, dict) and "choice" in m]
         old = d.get("keys") or []
@@ -334,6 +368,7 @@ class Taste:
     def to_json(self):
         return {"beats": self.beats, "yscale": round(self.yscale, 4), "seeds": {str(k): v for k, v in self.seeds.items()},
                 "moments": self.moments, "keys": self.space.keys,
+                "calib": {"feats": FEATS, "labels": self.labels, "A": np.round(self.cA, 4).tolist(), "b": np.round(self.cb, 4).tolist()},
                 "A_b64": base64.b64encode(self.A[np.triu_indices(len(self.b))].astype(np.float32).tobytes()).decode(),
                 "b": np.round(self.b, 5).tolist(), "seen": np.round(self.seen, 2).tolist()}
 
@@ -355,6 +390,25 @@ class Taste:
         self.beats += 1
         self.yscale += (abs(y) - self.yscale) * 0.02
         self._mu = self._L = None
+
+    def weights(self):
+        """How this person's face is read in this edition: the defaults, moved by their Love / Skip / Keep taps."""
+        if self._w is None:
+            self._w = np.linalg.solve(self.cA, self.cb)
+        return self._w
+
+    def learn_label(self, f, y):
+        """A tap: the face looked like f (feature vector) just before they said yes (y > 0) or no (y < 0)."""
+        self.cA = self.cA + np.outer(f, f) / CALIB_NOISE ** 2
+        self.cb = self.cb + f * y / CALIB_NOISE ** 2
+        self.labels += 1
+        self._w = None
+
+    def tells(self, k=3):
+        """The face signals that, for this person, have moved furthest from the defaults."""
+        w = self.weights(); d = w - self.w0
+        order = np.argsort(-np.abs(d))
+        return [{"feat": FEATS[i], "w": round(float(w[i]), 2), "change": round(float(d[i]), 2)} for i in order[:k] if abs(d[i]) > 0.05]
 
     def learn_pair(self, dx, d):
         """A judged change: the face moved by d when the painting changed by dx. Drift in the resting face cancels."""
@@ -409,12 +463,13 @@ class Profile:
     def __init__(self, pid, name, d=None):
         self.pid, self.name = pid, name
         self.exemplars, self.base, self.device = [], None, None
+        self.sd = {}                                        # how much each signal normally varies for this person
         self.created = self.last_seen = time.time()
         self.tastes, self._raw = {}, {}
         if d:
             self.exemplars = [list(map(float, e)) for e in d.get("exemplars", [])]
-            self.base, self.device = d.get("base"), d.get("device")
-            if self.base is not None:   # profiles from before tension/squint were read: start those at rest
+            self.base, self.device, self.sd = d.get("base"), d.get("device"), dict(d.get("sd") or {})
+            if self.base is not None:   # profiles from before newer signals were read: start those at rest
                 for k in SIGNALS:
                     self.base.setdefault(k, 0.0)
             self.created, self.last_seen = d.get("created", self.created), d.get("last_seen", self.last_seen)
@@ -424,10 +479,10 @@ class Profile:
                 self._raw = {"bliss": d}
             # the first Mirror (fixed worlds): keep who they are; taste starts fresh
 
-    def taste(self, space):
+    def taste(self, space, prior=None):
         t = self.tastes.get(space.edition)
         if t is None:
-            t = self.tastes[space.edition] = Taste(space, self._raw.pop(space.edition, None))
+            t = self.tastes[space.edition] = Taste(space, self._raw.pop(space.edition, None), prior)
         return t
 
     def reactions(self):
@@ -437,7 +492,7 @@ class Profile:
         tastes = dict(self._raw)
         tastes.update({e: t.to_json() for e, t in self.tastes.items()})
         return {"version": 3, "pid": self.pid, "name": self.name, "exemplars": [[round(v, 5) for v in e] for e in self.exemplars],
-                "device": self.device, "base": self.base, "created": self.created, "last_seen": self.last_seen, "tastes": tastes}
+                "device": self.device, "base": self.base, "sd": {k: round(v, 5) for k, v in self.sd.items()}, "created": self.created, "last_seen": self.last_seen, "tastes": tastes}
 
     def distance(self, desc):
         if not self.exemplars:
@@ -515,8 +570,9 @@ class Profiles:
         return p
 
     def room_mean(self, space):
-        """What the room as a whole reacts to in this edition: used when nobody is in front of the mirror."""
-        ts = [p.taste(space) for p in self.people.values()]
+        """What the room as a whole reacts to in this edition: used when nobody is in front of the mirror, and as
+        the starting point for someone new."""
+        ts = [p.tastes[space.edition] for p in self.people.values() if space.edition in p.tastes and p.tastes[space.edition].beats > 0]
         if not ts:
             return np.zeros(space.K)
         w = np.array([math.sqrt(t.beats + 1) for t in ts])
@@ -548,6 +604,9 @@ class MirrorSession:
         self.edition = edition if edition in spaces else next(iter(spaces))
         self.space = spaces[self.edition]
         self.device_profile = None         # set when the viewer declined face recognition: one profile per phone
+        self.emo = None                    # (t, latest emotion probabilities) from the phone's emotion model
+        self.hr = None                     # (t, beats per minute, signal quality) read from skin colour
+        self.feats = deque()               # (t, feature vector) for explaining Love / Skip taps
         self.rng = np.random.default_rng(seed)
         self.viewer = None
         self.face_at = -1e9
@@ -575,7 +634,10 @@ class MirrorSession:
         self.room_mode(0.0, "waiting for someone to look")
 
     def taste(self):
-        return self.viewer.taste(self.space) if self.viewer is not None else None
+        if self.viewer is None:
+            return None
+        t = self.viewer.tastes.get(self.space.edition)
+        return t if t is not None else self.viewer.taste(self.space, self.profiles.room_mean(self.space))
 
     # ---------- for the server
     def want(self):
@@ -623,9 +685,9 @@ class MirrorSession:
     def on_sample(self, s, now):
         """s: list of SIGNALS values, or None when the camera sees no face."""
         if s is not None:
-            if len(s) == len(SIGNALS) - 2:      # an older phone page without tension/squint
-                s = list(s) + [0.0, 0.0]
-            if len(s) != len(SIGNALS) or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in s):
+            if len(s) in (11, 13):              # older phone pages: missing signals read as "at rest"
+                s = list(s) + [None] * (len(SIGNALS) - len(s))
+            if len(s) != len(SIGNALS) or not all(v is None or (isinstance(v, (int, float)) and math.isfinite(v)) for v in s):
                 return
             self.face_at = now
             if self.viewer is None and self.device_profile is not None:
@@ -636,31 +698,97 @@ class MirrorSession:
         if s is None:
             self.samples.append((now, None)); self.glow *= 0.9
             return
-        sig = dict(zip(SIGNALS, s))
-        if v.base is None:  # learn this new face's resting expression (and how the phone sees their head) first
+        sig = {k: x for k, x in zip(SIGNALS, s) if x is not None}
+        if v.base is None:  # learn this new face's resting expression, its normal range, and how the phone sees their head
             self.warm.append(sig)
             if len(self.warm) >= WARMUP_SAMPLES:
-                v.base = {k: float(np.median([w[k] for w in self.warm])) for k in SIGNALS}
+                v.base, v.sd = {}, {}
+                for k in SIGNALS:
+                    xs = np.array([w[k] for w in self.warm if k in w])
+                    v.base[k] = float(np.median(xs)) if len(xs) else 0.0
+                    v.sd[k] = max(SD_FLOOR[k], float(1.4826 * np.median(np.abs(xs - v.base[k]))) if len(xs) else 0.0)
                 self.warm = []
                 self.event(f"learned {v.name}'s resting face; now watching reactions")
             return
-        e = self.engagement(sig, v.base, self.edition)
+        self.track(v, sig)
+        f = self.features(sig, v, now)
+        t = self.taste()
+        e = float(t.weights() @ f)
         self.samples.append((now, e))
+        self.feats.append((now, f))
+        while self.feats and self.feats[0][0] < now - 6:
+            self.feats.popleft()
         self.glow += (e - self.glow) * 0.2
-        a = 0.0005  # resting face drifts over minutes (lighting, tiredness, how the phone is propped); faster would cancel real reactions
-        for k in SIGNALS:
-            v.base[k] += (sig[k] - v.base[k]) * a
 
     @staticmethod
-    def engagement(sig, base, edition="bliss"):
-        ed = EDITIONS[edition]
-        e = sum(w * (sig[k] - base[k]) for k, w in ed["score"].items())
-        e += ed["lean"] * max(-0.3, min(0.3, sig["size"] / max(base["size"], 1e-3) - 1))   # leaning in (or pulling back)
-        if abs(sig["yaw"] - base["yaw"]) > TURN_YAW or abs(sig["pitch"] - base["pitch"]) > TURN_PITCH:
-            e += ed["turned"]   # measured from this person's own resting pose, so a phone propped at an angle doesn't count
-        if sig["blink"] > max(0.6, base["blink"] + 0.35):
-            e += ed["eyes_closed"]
-        return e
+    def track(v, sig, a=0.0005, b=0.001):
+        """Resting face and normal range drift over minutes (lighting, tiredness, how the phone is propped); faster
+        would cancel real reactions. The range is updated from clipped deviations so one big reaction can't blow it up."""
+        for k, x in sig.items():
+            m = v.base.get(k)
+            if m is None:
+                v.base[k], v.sd[k] = x, SD_FLOOR.get(k, 0.05); continue
+            sd = v.sd.get(k, SD_FLOOR.get(k, 0.05))
+            dev = max(-3 * sd, min(3 * sd, x - m))
+            v.base[k] = m + dev * a
+            v.sd[k] = max(SD_FLOOR.get(k, 0.01), math.sqrt((1 - b) * sd * sd + b * dev * dev))
+
+    def features(self, sig, v, now):
+        """The face right now, as how far each signal is from this person's normal (z-scores, clipped)."""
+        def z(k, x=None):
+            x = sig.get(k) if x is None else x
+            if x is None:
+                return 0.0
+            return max(-4.0, min(4.0, (x - v.base.get(k, x)) / max(v.sd.get(k, 0.0), SD_FLOOR.get(k, 0.05))))
+        f = dict.fromkeys(FEATS, 0.0)
+        for k in ("smile", "cheek", "wonder", "jaw", "frown", "browDown", "sneer", "tension", "squint", "blinkRate"):
+            f[k] = z(k)
+        f["lean"] = z("size")
+        f["stillness"] = -z("motion")
+        turned = abs(sig.get("yaw", 0) - v.base.get("yaw", 0)) > TURN_YAW or abs(sig.get("pitch", 0) - v.base.get("pitch", 0)) > TURN_PITCH
+        gaze = abs(sig.get("gazeH", 0) - v.base.get("gazeH", 0)) > GAZE_OFF or abs(sig.get("gazeV", 0) - v.base.get("gazeV", 0)) > GAZE_OFF
+        f["offscreen"] = 1.0 if (turned or gaze) else 0.0
+        f["eyesClosed"] = 1.0 if sig.get("blink", 0) > max(0.6, v.base.get("blink", 0) + 0.35) else 0.0
+        if self.emo is not None and now - self.emo[0] < 1.2:
+            for k, x in self.emo[1].items():
+                f[k] = z(k, x)
+        if self.hr is not None and now - self.hr[0] < 3.0 and self.hr[2] >= HR_MIN_Q:   # below that it's mostly noise
+            f["arousal"] = z("hr", self.hr[1]) * min(1.0, (self.hr[2] - 0.35) / 0.25)
+        return np.array([f[k] for k in FEATS])
+
+    def on_emotions(self, probs, now):
+        """The phone's emotion model: probabilities for EMOTIONS, a few times a second."""
+        if not isinstance(probs, list) or len(probs) != len(EMOTIONS) or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in probs):
+            return
+        e = dict(zip(EMOTIONS, (float(x) for x in probs)))
+        self.emo = (now, e)
+        if self.viewer is not None and self.viewer.base is not None:
+            self.track(self.viewer, e)
+
+    def on_heart(self, hr, now):
+        """Heart rate read from skin colour on the phone: [beats per minute, quality 0-1], about once a second."""
+        if not isinstance(hr, list) or len(hr) != 2 or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in hr):
+            return
+        bpm, q = float(hr[0]), float(hr[1])
+        if not 40 <= bpm <= 200:
+            return
+        self.hr = (now, bpm, q)
+        if self.viewer is not None and self.viewer.base is not None and q >= HR_MIN_Q:
+            self.track(self.viewer, {"hr": bpm}, a=0.002)
+
+    def label(self, y, now, why):
+        """A Love (y > 0), Keep (y > 0) or Skip (y < 0): teach this person's face weights what their face looked like
+        just before they decided."""
+        t = self.taste()
+        if t is None or not self.learning:
+            return
+        fs = [f for ts, f in self.feats if now - LABEL_FROM_S <= ts <= now - LABEL_TO_S]
+        if len(fs) >= 4:
+            t.learn_label(np.mean(fs, axis=0), y)
+            self.profiles.dirty = True
+            tells = ", ".join(f"{d['feat']} {d['w']:+.2f}" for d in t.tells(3))
+            self.log(f"mirror[{self.who}]: {why}: learning how {self.viewer.name}'s face says {'yes' if y > 0 else 'no'}"
+                     f" ({t.labels} taps so far{'; their tells: ' + tells if tells else ''})")
 
     def on_identity(self, desc, now):
         desc = np.asarray(desc, np.float32)
@@ -711,7 +839,7 @@ class MirrorSession:
         self.open_for(p, now)
 
     def open_for(self, p, now):
-        t, ed = p.taste(self.space), self.edition
+        t, ed = (self.taste() if p is self.viewer else p.taste(self.space)), self.edition
         if t.beats >= 30:   # someone it knows: open on their best moment, or on their favourite parts if it predicts those higher
             bm, c = t.best_moment(), t.best_choice()
             if bm and bm[3] >= float(self.space.features(c) @ t.mean()):
@@ -744,9 +872,21 @@ class MirrorSession:
         elif c == "next":
             t = self.taste()
             if t is not None and self.learning and self.dst is not None:
-                t.learn(self.space.features(self.dst[0]), -max(0.04, t.yscale)); self.profiles.dirty = True
+                t.learn(self.space.features(self.dst[0]), -2 * max(0.04, t.yscale)); self.profiles.dirty = True
+            self.label(-1.0, now, "Skip")
             self.change = None
             self.jump(now, "you asked for something else (counts as a no for this painting)")
+        elif c == "love":
+            t = self.taste()
+            if t is not None and self.learning and self.dst is not None and self.dst[0] is not None:
+                unit = max(0.04, t.yscale)
+                t.learn(self.space.features(self.dst[0]), 3 * unit)       # a strong yes for every part of this painting
+                t.remember(self.dst[0], self.seed_b, 3 * unit)              # and a best moment to come back to
+                self.profiles.dirty = True
+                self.change = None
+                self.next_step = now + SAVOR_S                              # let them enjoy it before changing anything
+                self.event(f"{self.viewer.name} loves this: {self.space.describe(self.dst[0])}; holding it")
+            self.label(1.0, now, "Love")
         elif c == "edition":
             ed = str(d.get("edition"))
             if ed in self.spaces and ed != self.edition:
@@ -964,7 +1104,8 @@ class MirrorSession:
                "who": {"pid": v.pid, "name": v.name, "reactions": t.beats, "warming": v.base is None} if v else None,
                "showing": self.space.caption(c) if c is not None else [], "glow": round(max(-1.0, min(1.0, self.glow / (2 * unit))), 2),
                "recent": round(self.recent / unit, 2), "learning": self.learning, "why": self.reason,
-               "judging": bool(self.change and "t" in self.change and now < self.change["t"] + JUDGE_TO_S)}
+               "judging": bool(self.change and "t" in self.change and now < self.change["t"] + JUDGE_TO_S),
+               "hr": round(self.hr[1]) if self.hr is not None and now - self.hr[0] < 3 and self.hr[2] >= HR_MIN_Q + 0.05 else None}
         if t is not None:
             out["top"] = t.top(6)
         return out
@@ -974,7 +1115,8 @@ class MirrorSession:
         for p in sorted(self.profiles.people.values(), key=lambda p: -p.last_seen):
             t = p.taste(self.space)
             out.append({"pid": p.pid, "name": p.name, "reactions": t.beats, "top": t.top(5), "faces": len(p.exemplars),
-                        "device": p.device is not None, "moments": len(t.moments), "edition": self.edition})
+                        "device": p.device is not None, "moments": len(t.moments), "edition": self.edition,
+                        "taps": t.labels, "tells": t.tells(3)})
         return out
 
     def keep(self):

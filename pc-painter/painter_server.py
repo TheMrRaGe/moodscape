@@ -535,6 +535,7 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
             info = sess.keep()
             if info is None or keeping["busy"]:
                 return
+            sess.label(1.0, clock(), "Keep")   # keeping a moment is a yes, too
             keeping["busy"] = True
             await send_json({"keeping": True})
             try:
@@ -567,6 +568,10 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                         sess.on_sample(d["s"], clock())
                     if "id" in d and "cmd" not in d:
                         sess.on_identity(d["id"], clock())
+                    if "x" in d:
+                        sess.on_emotions(d["x"], clock())
+                    if "hr" in d:
+                        sess.on_heart(d["hr"], clock())
                     if d.get("cmd") == "keep":
                         asyncio.create_task(keep())
                     elif "cmd" in d:
@@ -664,14 +669,31 @@ def start_tunnel(port, which):
             if m:
                 show_link(m.group(0), which)
         log("tunnel: cloudflared exited; the phone link has stopped working. Restart this script.")
+        (HERE / "status" / "link.json").unlink(missing_ok=True)
     threading.Thread(target=watch, daemon=True).start()
     return proc
+
+
+def write_link_status(url, target, which):
+    """status/link.json and status/qr.png, so the Mirror agent (and whoever it's working for) can pass the code on."""
+    try:
+        d = HERE / "status"; d.mkdir(exist_ok=True)
+        (d / "link.json").write_text(json.dumps({"url": url, "open": target, "app": which, "mirror": f"{url}/mirror.html",
+                                                 "apk": f"{url}/mirror.apk" if APK.is_file() else None,
+                                                 "time": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2), encoding="utf-8")
+        import qrcode
+        q = qrcode.QRCode(border=3, box_size=12, error_correction=qrcode.constants.ERROR_CORRECT_M)
+        q.add_data(target); q.make()
+        q.make_image(fill_color="black", back_color="white").save(d / "qr.png")
+    except Exception as e:
+        log(f"tunnel: couldn't save the QR code to status/ ({e!r})")
 
 
 def show_link(url, which="moodscape"):
     pair = f"{APP_URL}#pc={url}"
     mirror_url = f"{url}/mirror.html"
     target = mirror_url if which == "mirror" else pair
+    write_link_status(url, target, which)
     print("\n" + "=" * 72, flush=True)
     print(f"  On your phone, scan this QR code (or open the link) in Chrome to open the {'Mirror' if which == 'mirror' else 'Moodscape app'}:\n", flush=True)
     try:
