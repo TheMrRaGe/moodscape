@@ -71,6 +71,27 @@ The camera and WebGPU both need HTTPS (or `localhost`).
 
 Expect about 1–4 s per painting on a recent flagship, and longer for the first one while shaders compile. 6 GB of RAM or more is recommended. With 4 GB, close other apps first; below 4 GB it won't start the painter and shows the live sketch instead. If anything fails, the status line and the Taste panel's log say what happened.
 
+## PC painter: live stream for phones that can't run the model
+
+Budget phones such as the Galaxy A15 don't have the memory or GPU for the painter. `pc-painter/` runs it on a computer's graphics card instead and **streams a continuously repainted landscape** to the phone. The landscape morphs as your face changes, at whatever frame rate the GPU manages.
+
+```
+phone: camera → face → mood mix + learned style taste + layout seed ──(~20×/s, a few hundred bytes)──► PC
+PC:    SDXS one-step painting on the GPU, with a slow drift in noise space so the scene breathes ──(JPEG frames)──► phone
+```
+
+1. On the PC, open the `pc-painter` folder and run **`start-windows.bat`** (Windows; double-click) or **`./start.sh`** (Linux/macOS). The first run installs Python packages, downloads the model (635 MB) and Cloudflare's tunnel tool, then tests your GPU. It prints the GPU's name and a measured frame rate, for example "about 18 frames per second on NVIDIA GeForce RTX 3060, which will look smooth".
+2. It then prints a **QR code**. Scan it with the phone and open the link in Chrome. That link opens Moodscape at its usual address and pairs it with this PC, so your learned taste is kept.
+3. Tap **Start camera**. The status line shows "Live from <your PC> · N fps".
+
+**Notes:**
+- The tunnel address changes each time the script restarts, so scan the new code then.
+- Once paired, the phone never tries to run the painter itself. If the PC is off, it shows the sketch and keeps retrying.
+- Only numbers leave the phone, never video or images. The PC only accepts stream connections from the app's own addresses.
+- Learning still works in the stream. Every 6 s (`LEARN.streamProbeGapMs`) it sends a style variation and scores your reaction to the first frame that shows it.
+- Options: `--max-fps 15` caps the frame rate, `--motion 0` turns off the gentle self-motion, and `--no-tunnel` serves on the local network only.
+- If the network blocks WebSockets, the app falls back to single paintings over HTTPS (`/api/paint`).
+
 ## Tuning
 
 At the top of the script in `index.html`:

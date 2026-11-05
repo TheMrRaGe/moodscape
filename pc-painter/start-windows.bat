@@ -8,6 +8,6 @@ if not exist .venv (
 )
 call .venv\Scripts\activate.bat
 echo Installing painter libraries, first run takes a minute...
-python -m pip install -q --disable-pip-version-check numpy pillow onnxruntime-directml qrcode
+python -m pip install -q --disable-pip-version-check numpy pillow onnxruntime-directml aiohttp qrcode
 python painter_server.py %*
 pause

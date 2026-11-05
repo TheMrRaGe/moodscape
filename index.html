@@ -247,6 +247,7 @@ const LEARN = {
   seedPool: 10,            // layouts remembered
   seedHoldMs: 25000,       // a scene change may switch layout at most this often
   newWorldPenalty: -0.3,   // tapping "New world" is a mild thumbs-down for the current layout
+  streamProbeGapMs: 6000,  // live stream: how often to try a style variation and watch the reaction
 };
 
 const EMO = ["joy", "surprise", "anger", "sadness", "calm"];
@@ -600,15 +601,97 @@ const pcName = (pc) => `${pc.host || "your PC"} (${String(pc.provider).replace("
 
 function useRemote(pc) {
   ai.remote = pc; ai.enabled = true;
-  stage(`painter: using the PC painter on ${pcName(pc)}`);
   if (!ai.x) {
     const fav = bestSeed();
     seedNoise(fav ? fav.seed : newSeed());
     logLine(fav ? `starting with your favourite layout #${fav.seed} (avg ${sgn(fav.sum / fav.n)})` : `starting with new layout #${ai.seed}`);
   }
-  ai.ready = true; ai.force = true;
   $("#btnReroll").disabled = false;
+  if (pc.stream && !pc.noStream) return startStream(pc);
+  stage(`painter: using the PC painter on ${pcName(pc)}`);
+  ai.ready = true; ai.force = true;
   aiState("busy", `Painting on ${pcName(pc)}…`);
+}
+
+/* ---------- Live stream from the PC ----------
+   The phone sends a small control message (prompt mix, style taste per mood, layout seed) about 20 times a
+   second; the PC paints frames continuously from the latest one and streams JPEGs back. Learning still works:
+   every few seconds a style probe is sent, and the reaction to the first frame that shows it is scored. */
+const live = { ws: null, open: false, opened: false, cid: 0, sentAt: 0, lastMsg: "", shown: null, probe: null, probeCid: 0,
+  lastProbeAt: 0, fps: 0, lastFrameAt: 0, gpuMs: 0, decoding: false, frames: 0, statusAt: 0 };
+function startStream(pc) {
+  const url = new URL("api/stream", pc.base || location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  stage(`painter: connecting the live stream from ${pcName(pc)}`);
+  aiState("busy", `Connecting the live stream from ${pcName(pc)}…`);
+  let ws;
+  try { ws = new WebSocket(url); } catch (e) { return streamFallback(pc, e.message); }
+  ws.binaryType = "arraybuffer";
+  live.ws = ws;
+  ws.onopen = () => {
+    live.open = live.opened = true; live.lastMsg = ""; live.frames = 0;
+    logLine(`live stream connected to ${pcName(pc)}${pc.fps ? ` (it measured ~${pc.fps} fps)` : ""}`);
+    stage("running: live stream connected");
+    journal.ok = true;
+  };
+  ws.onmessage = (ev) => { if (typeof ev.data !== "string") onStreamFrame(ev.data); };
+  ws.onclose = () => {
+    if (live.ws !== ws) return;
+    const wasOpen = live.open;
+    live.open = false; live.ws = null;
+    if (!live.opened) return streamFallback(pc, "the connection didn't open");
+    logLine("live stream closed");
+    aiState("error", `Live stream from ${pc.host || "your PC"} stopped. Reconnecting…`);
+    const retry = async () => { const p = await findPcPainter(); if (p) { live.opened = false; useRemote(p); } else setTimeout(retry, 5000); };
+    setTimeout(retry, wasOpen ? 1500 : 5000);
+  };
+}
+function streamFallback(pc, why) { // a tunnel or network that blocks WebSockets still gets single paintings
+  logLine(`live stream unavailable (${why}); using single paintings instead`);
+  pc.noStream = true;
+  useRemote(pc);
+}
+async function onStreamFrame(buf) {
+  if (buf.byteLength < 16) return;
+  const [seq, cid, gpuMs] = new Uint32Array(buf, 0, 3);
+  try { live.ws?.send(`{"ack":${seq}}`); } catch {}
+  if (live.decoding) return; // phone is still drawing the last frame: skip this one rather than fall behind
+  live.decoding = true;
+  try {
+    const bmp = await createImageBitmap(new Blob([new Uint8Array(buf, 12)], { type: "image/jpeg" }));
+    const g = front.getContext("2d");
+    g.drawImage(bmp, 0, 0, 512, 512); bmp.close?.();
+    if (!front.classList.contains("front")) { front.classList.add("front"); back.classList.remove("front"); }
+    $("#paint").classList.add("on");
+  } catch { /* a corrupt frame: wait for the next */ } finally { live.decoding = false; }
+  const now = performance.now();
+  if (live.lastFrameAt) live.fps += (1000 / Math.max(1, now - live.lastFrameAt) - live.fps) * 0.15;
+  live.lastFrameAt = now; live.gpuMs = gpuMs; live.frames++;
+  if (live.probe && cid >= live.probeCid && !reaction) { // the probe is on screen: start watching the reaction
+    beginReaction(live.probe);
+    live.probe = null;
+  }
+  if (now - live.statusAt > 600) {
+    live.statusAt = now;
+    aiState("ready", `Live from ${ai.remote?.host || "your PC"} · ${live.fps.toFixed(0)} fps${reaction ? " · watching your reaction" : ""}`);
+  }
+}
+function streamTick(now) {
+  if (!live.open) return;
+  if (reaction && now - reaction.t0 >= LEARN.reactToMs) finishReaction();
+  const w = moodWeights(), learning = canLearn();
+  if (learning && !reaction && !live.probe && now - live.lastProbeAt > LEARN.streamProbeGapMs && live.frames > 3) {
+    maybeSwitchLayout(w, learning);
+    const { shown, probe } = styleMix(w, true);
+    live.shown = shown; live.cid++; live.probeCid = live.cid; live.lastProbeAt = now;
+    live.probe = { id: ++ai.count, weights: w, probe, seed: ai.seed };
+    const tried = Object.keys(probe.x);
+    logLine(`probe #${ai.count}: style variation for ${tried.join(", ") || "no mood"} on layout #${ai.seed}`);
+  } else if (!reaction && !live.probe) live.shown = styleMix(w, false).shown; // learned taste only, between probes
+  if (now - live.sentAt < 50 || !live.shown) return;
+  const msg = JSON.stringify({ ctl: { cid: live.cid, w: w.map((v) => +v.toFixed(3)), th: live.shown.map((s) => s.map((v) => +v.toFixed(3))), seed: ai.seed, motion: reduceMotion ? 0 : 1 } });
+  if (msg === live.lastMsg) return;
+  try { live.ws.send(msg); live.lastMsg = msg; live.sentAt = now; } catch {}
 }
 
 async function loadAI() {
@@ -692,24 +775,37 @@ async function loadAI() {
 
 /* Build the conditioning: sum_m w_m * (E[m] + sum_k theta'[m][k] * D[m][k]).
    theta' = learned taste + a small random probe, so each painting is also an experiment. */
+/* The style each mood is shown with: learned taste, plus a random probe for moods that clearly shape this
+   picture when exploring. Returns shown[j] per mood (in ai.order) and the probe the reward model learns from. */
+function styleMix(weights, explore) {
+  const K = ai.styles.length, probe = { eps: {}, sigma: {}, x: {} };
+  const shown = ai.order.map((m, j) => {
+    if (!K) return [];
+    const w = weights[j], th = tasteTheta(m);
+    let eps = null;
+    if (explore && w >= 0.05) {
+      const sigma = Math.max(LEARN.sigmaMin, LEARN.sigma0 / Math.sqrt(1 + (taste.n[m] || 0) / 8));
+      eps = Array.from({ length: K }, () => gauss() * sigma);
+      probe.eps[m] = eps; probe.sigma[m] = sigma;
+    }
+    let s = th.map((v, k) => clamp(v + (eps ? eps[k] : 0), LEARN.thetaMin, LEARN.thetaMax));
+    const norm = Math.hypot(...s);
+    if (norm > LEARN.maxNorm) s = s.map((v) => (v * LEARN.maxNorm) / norm); // probes stay in the safe range too
+    if (eps) probe.x[m] = s; // the style actually shown, which is what the reward model learns from
+    return s;
+  });
+  return { shown, probe };
+}
+
 function buildEmbedding(weights, explore) {
-  const emb = new Float32Array(N_EMB), K = ai.styles.length, probe = { eps: {}, sigma: {}, x: {} };
+  const emb = new Float32Array(N_EMB), K = ai.styles.length;
+  const { shown: mix, probe } = styleMix(weights, explore);
   weights.forEach((w, j) => {
     if (w <= 0.001) return;
     const o = j * N_EMB;
     for (let i = 0; i < N_EMB; i++) emb[i] += ai.emb[o + i] * w;
     if (!K) return;
-    const m = ai.order[j], th = tasteTheta(m);
-    let eps = null, sigma = 0;
-    if (explore && w >= 0.05) {
-      sigma = Math.max(LEARN.sigmaMin, LEARN.sigma0 / Math.sqrt(1 + (taste.n[m] || 0) / 8));
-      eps = Array.from({ length: K }, () => gauss() * sigma);
-      probe.eps[m] = eps; probe.sigma[m] = sigma;
-    }
-    let shown = th.map((v, k) => clamp(v + (eps ? eps[k] : 0), LEARN.thetaMin, LEARN.thetaMax));
-    const norm = Math.hypot(...shown);
-    if (norm > LEARN.maxNorm) shown = shown.map((v) => (v * LEARN.maxNorm) / norm); // probes stay in the safe range too
-    if (eps) probe.x[m] = shown; // the style actually shown, which is what the reward model learns from
+    const shown = mix[j];
     for (let k = 0; k < K; k++) {
       const t = shown[k] * w;
       if (Math.abs(t) < 0.004) continue;
@@ -1354,7 +1450,7 @@ function loop(now) {
   gust += (gustT - gust) * (1 - Math.exp(-dt * 3));
   headX += (headXT - headX) * (1 - Math.exp(-dt * 3));
   headY += (headYT - headY) * (1 - Math.exp(-dt * 3));
-  maybePaint(now);
+  if (live.open) streamTick(now); else maybePaint(now);
   const pal = frame(dt);
   updateUI(pal, dt);
   requestAnimationFrame(loop);
