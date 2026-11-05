@@ -46,7 +46,8 @@ APP_URL = "https://raw.githack.com/TheMrRaGe/moodscape/main/index.html"  # the a
 FILES = {"unet": ("unet.onnx", 631766742), "vae": ("vae_decoder.onnx", 2467568)}
 SIGMA = 14.614646911621094
 N_EMB, N_LAT = 77 * 768, 4 * 64 * 64
-BLOCKED = {"pc-painter", ".git", "tools", ".github", ".models"}
+BLOCKED = {"pc-painter", ".git", "tools", ".github", ".models", "android"}   # android/ holds the app's signing key
+APK = APP_DIR / "android" / "moodscape-mirror.apk"
 ALLOWED_ORIGIN_SUFFIXES = (".githack.com", ".trycloudflare.com")
 APP_ORIGIN_HOSTS = ("appassets.androidplatform.net",)   # the Moodscape Mirror Android app
 
@@ -592,6 +593,13 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
             raise web.HTTPNotFound()
         return web.FileResponse(path, headers={"Content-Type": KEEP_FILES[file], "Cache-Control": "no-store"})
 
+    async def apk(request):
+        """The Android app, built by android/build.sh, for phones to download straight from this PC."""
+        if not APK.is_file():
+            return web.Response(status=404, text="The app hasn't been built on this PC (android/build.sh), or get it from the repo's releases.")
+        return web.FileResponse(APK, headers={"Content-Type": "application/vnd.android.package-archive",
+                                              "Content-Disposition": 'attachment; filename="moodscape-mirror.apk"', "Cache-Control": "no-store"})
+
     async def static(request):
         rel = request.match_info.get("path", "") or "index.html"
         parts = [p for p in rel.split("/") if p]
@@ -612,6 +620,7 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
         async def save_profiles(_app):
             profiles.save(force=True)
         app.on_shutdown.append(save_profiles)
+    app.router.add_get("/mirror.apk", apk)
     app.router.add_get("/", static)
     app.router.add_get("/{path:.*}", static)
     return app
@@ -674,6 +683,8 @@ def show_link(url, which="moodscape"):
     print(f"\n    {target}\n", flush=True)
     if which == "mirror":
         print("  In the Moodscape Mirror Android app: tap 'Scan the QR code' and point it here.", flush=True)
+        if APK.is_file():
+            print(f"  Get the app on the phone: {url}/mirror.apk", flush=True)
         print("  The Mirror is served by this PC, so the link changes each time you restart", flush=True)
         print("  this script; scan the new code then. People it has learned stay on this PC.", flush=True)
         print(f"  Moodscape (mood app) link:  {pair}", flush=True)

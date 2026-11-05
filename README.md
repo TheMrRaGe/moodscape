@@ -138,7 +138,7 @@ Nothing about the viewer goes into a capture.
 - **Forget** in the People panel deletes a person; deleting the file forgets everyone.
 
 **Android app:** `android/` builds **Moodscape Mirror**, a small app (about 90 KB) that holds the Mirror page and opens it full screen. It asks for the camera when you start, and keeps the screen awake.
-1. Download `moodscape-mirror.apk` from the repo's [Releases](https://github.com/themrrage/moodscape/releases) on the phone.
+1. Get `moodscape-mirror.apk` onto the phone. The painter serves the copy in `android/` at `<its link>/mirror.apk` and prints that address at startup, so you can open it in the phone's browser.
 2. Open it. Android asks you to allow installs from your browser once.
 3. In the app, tap **Scan the QR code** and point it at the code `mirror-windows.bat` prints, or paste the link.
 
