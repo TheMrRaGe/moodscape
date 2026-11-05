@@ -5,3 +5,4 @@ pc-painter/.venv/
 pc-painter/profiles.json
 pc-painter/profiles.*.json
 pc-painter/profiles.tmp
+pc-painter/captures/

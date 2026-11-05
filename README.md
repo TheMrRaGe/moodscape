@@ -92,44 +92,54 @@ PC:    SDXS one-step painting on the GPU, with a slow drift in noise space so th
 - Options: `--max-fps 15` caps the frame rate, `--motion 0` turns off the gentle self-motion, and `--no-tunnel` serves on the local network only.
 - If the network blocks WebSockets, the app falls back to single paintings over HTTPS (`/api/paint`).
 
-## The Mirror: a painting that evolves toward what each person lights up at
+## The Mirror: a painting that evolves toward how you react
 
-`mirror.html` is a second app, served by the PC painter. Prop your phone up like a small mirror and look into it. It recognizes who is looking. Every few seconds it changes one thing about the painting (the place, a detail, the time of day, the weather, the colours, the style, the framing) and watches the next second and a half of that person's face. What they warm to stays; what they cool on is undone. Each person gets their own taste, and when someone else steps in, the painting changes for them.
+`mirror.html` is a second app, served by the PC painter. Prop your phone up like a small mirror and look into it. Every few seconds it changes one thing about the painting and watches the next second and a half of your face. A change that lands stays; one that doesn't is undone. It comes in two editions:
 
-Paintings aren't picked from a list. Each one is built from one choice per section of `pc-painter/mirror-space.txt`, which makes about 50 million possible paintings. Prompts are encoded on the GPU as they're needed.
+- **Bliss** keeps what you light up at: a smile that reaches your eyes, wonder, leaning in.
+- **Unease** keeps what makes you tense up *while you keep watching*: furrowed brows, pressed lips, a wrinkled nose, a wince, pulling back. A smile means it isn't working, and leaving means it lost you. It's eerie, uncanny and liminal (empty malls at 3 am, a doll in a motel corridor), never gory. The phone asks before entering it, and **Bliss** at the top takes you back.
+
+Paintings aren't picked from a list. Each one is a choice from every section of `pc-painter/mirror-bliss.txt` or `pc-painter/mirror-unease.txt`: subject, place, detail, time, weather, lighting, palette, style and framing. That's about 8.3 billion Bliss paintings and 223 million Unease ones. Prompts are encoded on the GPU as they're needed.
 
 ```
-phone:   camera → MediaPipe expression (~14×/s) + face-api fingerprint (128 numbers, every 1.3–3 s) ──► laptop
-laptop:  who is it?      nearest known fingerprint, or a new "Guest" after 3 unknown reads
-         the loop        every ~2.6 s: change one part (picked by Thompson sampling over what it has learned),
-                         let it melt in, compare the face 0.7–2.2 s later with just before: keep or undo
-                         · lighting up → hold the painting longer · nothing landing → change three parts at once
-         what it learns  an affinity per option (e.g. "time: Dusk"), by Bayesian regression from what was on
-                         screen 0.7 s ago → how the face responded, plus every judged before/after change.
-                         Each reaction teaches it about all seven parts at once
-         memory          the strongest moments (exact painting + layout); a known face opens on its best one
+phone:   camera → MediaPipe expression (~14×/s): smile, brows, eyes, lips, head pose, distance ──► laptop
+         (only if the viewer ticks "Recognize faces": a face-api fingerprint every 1.3–3 s)
+laptop:  who is it?      a known fingerprint, a new "Guest", or, with recognition off, simply this phone
+         the loop        every ~2.6 s: change one part (Thompson sampling over what it has learned), let it
+                         melt in, compare the face 0.7–2.2 s later with just before: keep or undo
+                         · reacting strongly → hold longer · nothing landing → change three parts at once
+         what it learns  per person, per edition: an affinity for every option (e.g. "time: 3 am"), from
+                         every second of viewing and every judged change, plus their strongest moments
          paint it        SDXS one step per frame, melting between prompt embeddings; layouts slerp  ──► JPEG stream
 ```
 
 **Run it:**
 
-1. On the laptop, double-click **`pc-painter/mirror-windows.bat`** (on Linux/macOS: `./pc-painter/mirror.sh`). The first run sets up Python and downloads the model. At startup it prints the frame rate and how long a new painting takes to encode.
-2. Scan the QR code it prints with your Android phone and open it in Chrome. Tap **Look into the mirror** and allow the camera.
-3. Hold still for a couple of seconds. It meets you as "Guest 1"; tap the name to rename yourself.
+1. On the laptop, double-click **`pc-painter/mirror-windows.bat`** (on Linux/macOS: `./pc-painter/mirror.sh`). At startup it prints the frame rate and how long a new painting takes to encode.
+2. Scan the QR code with your Android phone and open it in Chrome. Choose whether it may recognize faces, tap **Look into the mirror** and allow the camera.
+3. Hold still for a couple of seconds while it learns your resting face. With recognition on, it meets you as "Guest 1"; tap the name to rename yourself.
 
 You can also try it on the laptop with its own webcam: `http://localhost:8765/mirror.html`.
 
-**What it learns from:** a growing smile, smile lines around the eyes, wonder (wide eyes, raised brows, open mouth) and leaning in all count as lighting up. Frowning, lowered brows, a wrinkled nose, looking away and closing your eyes count against. Each person's resting face is learned first, including how the phone sees their head. A phone propped at an angle doesn't count as looking away; only turning away from your own resting pose does. **Something else** jumps somewhere new and counts as a no for the current painting.
+**Keep:** tap **Keep** to save what's on screen in `pc-painter/captures/<edition>-<date>-<time>-<place>/`. Each capture holds:
+- `still.png`
+- `loop.webp`: a seamless 48-frame living loop of the painting breathing
+- `metadata.json`: in the common NFT metadata shape (`name`, `description`, `image`, `animation_url`, `attributes` for edition and every part), plus the recipe (prompt and layout seed) so the painting can be re-rendered as proof of origin.
 
-**What to expect:** in simulation (`python pc-painter/test_mirror_sim.py`), on a scale where 0 is a random painting and 1 is a viewer's perfect one, what it shows climbs from about 0.3 in the first two minutes to about 0.65 after ten. A new viewer reaches about 0.55 within six minutes. Real faces are noisier than simulated ones.
+Nothing about the viewer goes into a capture.
 
-**Change the space:** edit `pc-painter/mirror-space.txt` (sections like `[place]`, lines like `Label | words for the painter`), then restart. Learned scores are kept by section and label, so new options start fresh and everything else is kept.
+**What to expect:** in simulation (`python pc-painter/test_mirror_sim.py`), 0 is a random painting and 1 is a viewer's ideal. Bliss climbs from about 0.3 in the first two minutes to 0.6–0.75 after fifteen. Unease is slower and more variable, at 0.3–0.6 after ten minutes. Real faces are noisier than simulated ones.
 
-**Privacy:** the phone sends the laptop only numbers. Names, face fingerprints, tastes and best moments are stored in `pc-painter/profiles.json` on the laptop, which is git-ignored. **Forget** in the People panel deletes a person; deleting the file forgets everyone.
+**Change the space:** edit the edition's `.txt` file (sections like `[subject]`, lines like `Label | words for the painter`), then restart. Learned scores are kept by section and label. In Unease, leave unwanted things out rather than writing "no gore": CLIP doesn't understand "no", so naming a thing pulls it in.
+
+**Privacy:** the phone sends the laptop numbers, never video or photos.
+- **Face recognition is off unless the viewer ticks the box.** With it off, the mirror belongs to that phone (a random id) and no fingerprint is made.
+- **With it on,** names, fingerprints, tastes and best moments are stored in `pc-painter/profiles.json` on the laptop, which is git-ignored.
+- **Forget** in the People panel deletes a person; deleting the file forgets everyone.
 
 **Notes:**
 - The link changes every time the script restarts, so scan the new QR code then.
-- Speed is whatever the laptop's GPU manages; under 6 fps it looks like a slow dissolve rather than live. Up to four frames are in flight at once, so the tunnel's round trip doesn't cap the frame rate.
+- Speed is whatever the laptop's GPU manages; under 6 fps it looks like a slow dissolve. Up to four frames are in flight at once, so the tunnel's round trip doesn't cap the frame rate.
 - `start-windows.bat` still works exactly as before for the mood app. Both apps share the one painter.
 
 ## Tuning

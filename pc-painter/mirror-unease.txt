@@ -1,0 +1,119 @@
+# Unease: the Mirror edition that keeps what makes you tense up while you keep watching.
+# Eerie, uncanny and liminal, never gore: keep it that way when you edit. (Don't write "no gore" or "no blood"
+# here: CLIP doesn't understand "no", so naming them pulls them in. Leave them out instead.)
+# Same format as mirror-bliss.txt.
+
+ending: eerie unsettling atmosphere, highly detailed
+
+[subject]
+Just the place      | (none)
+Red balloon         | a lone red balloon
+Porcelain doll      | a porcelain doll sitting upright
+Mannequins          | a row of mannequins
+Lone door           | a door standing alone with no walls
+Old telephone       | an old telephone off the hook
+Static TV           | a television glowing with static
+Empty swing         | an empty swing still moving
+Stopped clock       | a stopped grandfather clock
+Smiling mask        | a smiling theater mask on the wall
+Distant figure      | a tall silhouette far away
+Rocking chair       | an empty rocking chair
+Carousel horse      | a lone carousel horse
+Staring deer        | a deer standing too still, staring
+Crow                | a crow watching
+Vending machine     | a flickering vending machine
+Birthday cake       | a birthday cake with unlit candles
+Too many chairs     | rows of empty chairs facing a wall
+
+[place]
+Empty mall          | in an empty shopping mall after closing
+Drained pool        | in a drained indoor swimming pool
+Endless office      | in an endless office of empty cubicles
+Motel corridor      | in a motel corridor
+Closed carnival     | in an abandoned carnival
+Bare forest         | in a forest of bare trees
+Flooded basement    | in a flooded basement
+Empty bedroom       | in an empty childs bedroom
+Subway platform     | on an empty subway platform
+Hospital hallway    | in a long hospital hallway
+Cornfield           | in a cornfield
+Deep ocean          | in the deep dark ocean
+Foggy playground    | in a foggy playground
+Parking garage      | in an empty parking garage
+Attic               | in an attic of covered furniture
+Ballroom            | in an abandoned hotel ballroom
+Night highway       | on an empty highway at night
+Laundromat          | in a laundromat at night
+School hallway      | in an empty school hallway
+Identical suburb    | in a suburb of identical houses
+Endless stairs      | on a staircase that never ends
+
+[detail]
+Nothing extra       | (none)
+Flickering lights   | with flickering fluorescent lights
+Too many doors      | with far too many doors
+Impossible stairs   | with impossible stairs
+Eyes in the dark    | with eyes glinting in the dark
+Moths               | with moths swarming
+VHS static          | with vhs static
+Long shadows        | with long shadows
+Dripping water      | with dripping water
+Too tall            | where everything is slightly too tall
+Door ajar           | with a door left ajar
+Footprints          | with footprints that suddenly stop
+Red light           | with a faint red light
+Moving curtains     | with curtains moving without wind
+Creeping fog        | with fog creeping along the floor
+
+[time]
+3 am                | at 3 am
+Endless dusk        | at an endless dusk
+Grey noon           | at overcast noon
+Before dawn         | just before dawn
+Eclipse             | during an eclipse
+White sky           | under a white sky with no sun
+
+[lighting]
+Fluorescent         | buzzing fluorescent light
+Bare bulb           | a single bare bulb
+Camera flash        | harsh camera flash
+Green streetlight   | sickly green streetlight
+Emergency red       | red emergency light
+Flashlight          | a flashlight beam
+Deep shadow         | deep shadow
+TV glow             | the glow of a television
+
+[palette]
+Natural             | (none)
+Sickly yellow-green | sickly yellow green
+Grey                | desaturated grey
+Crimson             | deep crimson
+Sepia               | washed out sepia
+Clinical white      | cold clinical white
+Murky teal          | murky teal
+Faded pastel        | faded pastel
+Black and white     | stark black and white
+
+[style]
+Liminal photo       | liminal space photograph
+VHS still           | vhs still frame
+Found footage       | found footage
+Old polaroid        | old polaroid
+Infrared            | infrared photograph
+Dreamcore           | dreamcore
+Analog horror       | analog horror
+Uncanny render      | uncanny 3d render
+Tarnished oil       | tarnished oil painting
+Daguerreotype       | faded daguerreotype
+Surreal painting    | surreal painting
+Security camera     | security camera still
+Film noir           | film noir
+
+[framing]
+Dutch angle         | dutch angle
+Fisheye             | fisheye lens
+From above          | high corner view
+Through a doorway   | seen through a doorway
+Too close           | uncomfortably close
+Vast and empty      | vast and empty
+One-point           | symmetrical one point perspective

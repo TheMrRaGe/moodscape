@@ -1,0 +1,158 @@
+# Bliss: the Mirror edition that keeps what you light up at.
+# Every painting is one choice from each [section]. Each line is   Short label | words for the painter
+# The short label is what the phone shows. "(none)" leaves that part out. Add, remove or reword lines freely,
+# then restart the painter. Learned scores are kept by section and label. The "ending:" line is added to every
+# prompt; the painter warns if a combination is too long for CLIP (77 tokens).
+
+ending: highly detailed, beautiful, no people
+
+[subject]
+Just the place      | (none)
+Sleeping fox        | a fox curled up asleep
+Glowing deer        | a deer with glowing antlers
+Whale               | a gentle giant whale
+Owl                 | a wise snowy owl
+Koi dragon          | a golden koi dragon
+Cat                 | a fluffy cat
+Little robot        | a friendly little robot
+Lantern spirit      | a small glowing forest spirit
+Teacup              | a steaming teacup
+Old piano           | an old grand piano
+Vintage car         | a vintage convertible car
+Hourglass           | a giant hourglass
+Treehouse           | a cozy treehouse
+Single flower       | a single glowing flower
+Giant moon          | an enormous moon close to the ground
+Ink in water        | swirling clouds of ink in water
+Floating shapes     | floating glass spheres and cubes
+Fractal bloom       | an endless blooming fractal
+Paper boats         | a fleet of paper boats
+Sleeping dragon     | a sleeping baby dragon
+Jellyfish           | glowing jellyfish
+
+[place]
+Tropical beach      | on a quiet tropical beach
+Snowy cabin         | by a cozy log cabin in deep snow
+Neon city           | in a rain-soaked neon city street
+Ancient forest      | in an ancient forest of giant mossy trees
+Alpine lake         | by an alpine lake below snowy peaks
+Deep space          | in outer space with a nebula
+Coral reef          | in an underwater coral reef
+Cliff castle        | by a fairytale castle on a sea cliff
+Koi garden          | in a japanese garden with a koi pond
+Desert dunes        | in rolling desert dunes
+Lavender fields     | in rolling lavender fields
+Floating islands    | on floating islands in the sky
+Cozy library        | in a cozy library with a fireplace
+Jungle waterfall    | by a jungle waterfall
+Autumn road         | on a winding road through autumn trees
+Above the clouds    | on a summit above a sea of clouds
+Lighthouse          | by a lighthouse on dark rocks
+Rainy cafe          | in a warm cafe on a rainy night
+Greek island        | on a whitewashed greek island
+Ice cave            | in a glowing glacier ice cave
+Wheat farm          | in a golden wheat field
+Greenhouse          | in a sunlit greenhouse full of plants
+Canal city          | in an old canal city
+Bamboo forest       | in a misty bamboo forest
+Mushroom village    | in a village of giant mushrooms
+Night market        | in a lantern-lit night market
+Crystal cavern      | in a cavern of giant crystals
+Open ocean          | on the open ocean
+Starship window     | at a starship window over a planet
+Dreamy void         | in a soft endless void
+Bedroom at night    | in a cozy bedroom at night
+
+[detail]
+Nothing extra       | (none)
+Fireflies           | with fireflies
+Lanterns            | with glowing lanterns
+Cherry blossoms     | with cherry blossoms
+Rainbow             | with a rainbow
+Falling petals      | with drifting petals
+Shooting stars      | with shooting stars
+Butterflies         | with butterflies
+Bubbles             | with soap bubbles
+Glowing plants      | with glowing plants
+Fairy lights        | with fairy lights
+Snowflakes          | with drifting snowflakes
+Birds               | with flocks of birds
+Whales in the sky   | with whales in the sky
+Candles             | with candles
+
+[time]
+Dawn                | at dawn
+Sunrise             | at golden sunrise
+Midday              | at bright midday
+Afternoon           | in late afternoon
+Sunset              | at sunset
+Dusk                | at blue hour
+Starry night        | on a starry night
+Midnight moon       | at moonlit midnight
+
+[weather]
+Clear               | (none)
+Fog                 | in soft fog
+Rain                | in gentle rain
+Storm               | in a thunderstorm
+Snow                | in falling snow
+Aurora              | under an aurora
+Big clouds          | under towering clouds
+Summer haze         | in summer haze
+
+[lighting]
+Natural             | (none)
+Soft glow           | soft dreamy glow
+God rays            | volumetric god rays
+Rim light           | glowing rim light
+Candlelight         | warm candlelight
+Bioluminescence     | bioluminescent light
+Neon glow           | neon glow
+Sun flare           | lens flare sunlight
+
+[palette]
+Natural             | (none)
+Gold and amber      | gold and amber tones
+Blues and teals     | blue and teal tones
+Pastels             | pastel pink and lavender
+Vivid rainbow       | vivid rainbow colors
+Emerald             | emerald greens
+Fiery               | fiery reds and oranges
+Earthy              | soft earthy tones
+Neon                | neon pink and cyan
+Black and gold      | black and gold
+Monochrome          | silvery monochrome
+
+[style]
+Matte painting      | digital matte painting
+Watercolor          | watercolor painting
+Oil painting        | impasto oil painting
+Anime background    | anime film background
+Cinematic photo     | cinematic photograph
+Storybook           | storybook illustration
+Stained glass       | stained glass
+Woodblock print     | japanese woodblock print
+Impressionist       | impressionist painting
+Art nouveau         | art nouveau poster
+Surreal             | surreal dreamlike art
+Claymation          | claymation diorama
+Papercut            | layered papercut art
+Gouache             | gouache painting
+Ink wash            | chinese ink wash
+Pop art             | pop art
+Synthwave           | synthwave
+Vintage postcard    | vintage travel postcard
+Isometric 3D        | isometric 3d render
+Embroidery          | embroidery
+Mosaic              | mosaic tiles
+Chalk pastel        | chalk pastel drawing
+Baroque             | baroque painting
+Macro photo         | macro photograph
+
+[framing]
+Panoramic           | wide panorama
+Close-up            | cozy close-up
+Epic scale          | epic scale
+From above          | aerial view
+Miniature           | tiny diorama
+Low angle           | low angle

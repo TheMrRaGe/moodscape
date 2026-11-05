@@ -12,14 +12,16 @@ turns those into frames as fast as its GPU allows and streams them back.
     python painter_server.py --max-fps 15 --motion 0.5
     python painter_server.py --qr mirror  # the QR code opens the Mirror instead of Moodscape
 
-Mirror mode (mirror.html + mirror.py): the phone sends face numbers and a face fingerprint; this PC works out
-who is looking, and evolves a painting in real time toward what that person lights up at. Paintings are built
-from mirror-space.txt (about 50 million combinations) and encoded on the GPU as they're needed.
+Mirror mode (mirror.html + mirror.py): the phone sends face numbers (and, if the viewer agreed, a face
+fingerprint); this PC works out who is looking and evolves a painting in real time toward what that person
+reacts to. Two editions: Bliss (mirror-bliss.txt) keeps what you light up at, Unease (mirror-unease.txt) keeps
+what makes you tense up. "Keep" saves the moment as a still, a seamless living loop and NFT-style metadata in
+captures/.
 
 Every decision is printed: GPU backend and name, where the model came from, measured frame rate, each
 phone that connects, and per-connection stream stats.
 """
-import argparse, asyncio, base64, io, json, os, platform, re, shutil, struct, subprocess, sys, threading, time, urllib.request
+import argparse, asyncio, base64, io, json, math, os, platform, re, shutil, struct, subprocess, sys, threading, time, urllib.request
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -31,6 +33,9 @@ from aiohttp import web, WSMsgType
 from PIL import Image
 
 import mirror as mirror_mod
+
+CAPTURES = Path(__file__).resolve().parent / "captures"
+KEEP_FILES = {"still.png": "image/png", "loop.webp": "image/webp", "metadata.json": "application/json"}
 
 HERE = Path(__file__).resolve().parent
 APP_DIR = HERE.parent                     # the repo root holds index.html, manifest.json, icons
@@ -144,13 +149,15 @@ class Painter:
         return self.noise_cache[seed]
 
     def _run(self, emb, x):
+        buf = io.BytesIO(); Image.fromarray(self._image(emb, x)).save(buf, format="JPEG", quality=82)
+        return buf.getvalue()
+
+    def _image(self, emb, x):
         sample = (x / np.sqrt(SIGMA ** 2 + 1)).reshape(1, 4, 64, 64).astype(np.float32)
         eps = self.unet.run(None, {"sample": sample, "timestep": np.array([999], np.float32),
                                    "encoder_hidden_states": emb.reshape(1, 77, 768).astype(np.float32)})[0]
         img = self.vae.run(None, {"latent": (x.reshape(1, 4, 64, 64) - SIGMA * eps).astype(np.float32)})[0][0]
-        rgb = (np.clip(img / 2 + 0.5, 0, 1).transpose(1, 2, 0) * 255).astype(np.uint8)
-        buf = io.BytesIO(); Image.fromarray(rgb).save(buf, format="JPEG", quality=82)
-        return buf.getvalue()
+        return (np.clip(img / 2 + 0.5, 0, 1).transpose(1, 2, 0) * 255).astype(np.uint8)
 
     def _living(self, seed, t, m):
         n0, n1, n2 = self._noise(int(seed) & 0x7FFFFFFF)
@@ -184,6 +191,18 @@ class Painter:
         self.count += 1
         self.fps = 1000 / ms if self.fps == 0 else self.fps * 0.9 + (1000 / ms) * 0.1
         return jpeg, ms
+
+    def keepsake(self, emb, seed, frames=48):
+        """A seamless living loop of one painting: the noise travels once round a closed path, so the last frame
+        flows into the first. Returns (still RGB, [loop RGB frames], ms)."""
+        t0 = time.perf_counter()
+        n0, n1, n2 = self._noise(int(seed) & 0x7FFFFFFF)
+        out = []
+        for i in range(frames):
+            th = 2 * np.pi * i / frames
+            a, b = 0.10 * np.sin(th), 0.07 * np.sin(th + 1.3)
+            out.append(self._image(emb, (n0 * np.cos(a) * np.cos(b) + n1 * np.sin(a) + n2 * np.cos(a) * np.sin(b)) * SIGMA))
+        return out[0], out, (time.perf_counter() - t0) * 1000
 
     def paint_raw(self, emb, x):
         """Single painting from a phone that sends its own conditioning and noise (/api/paint)."""
@@ -230,6 +249,35 @@ async def cors(request, handler):
                              "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Expose-Headers": "X-Paint-Ms",
                              "Access-Control-Max-Age": "600", "Cache-Control": "no-store"})
     return resp
+
+
+def save_keepsake(info, still, frames):
+    """captures/<edition>-<date>-<time>-<place>/: still.png, loop.webp (seamless, 12 fps) and metadata.json in the
+    common NFT metadata shape (name, description, image, animation_url, attributes). The recipe (prompt + layout
+    seed) is included so the painting can be re-rendered as proof of origin. Nothing about the viewer is saved."""
+    slug = re.sub(r"[^a-z0-9]+", "-", " ".join(info["caption"][:2]).lower()).strip("-")[:40] or "moment"
+    name = f"{info['edition']}-{time.strftime('%Y%m%d-%H%M%S')}-{slug}"
+    d = CAPTURES / name
+    d.mkdir(parents=True, exist_ok=True)
+    Image.fromarray(still).save(d / "still.png")
+    imgs = [Image.fromarray(f) for f in frames]
+    imgs[0].save(d / "loop.webp", save_all=True, append_images=imgs[1:], duration=83, loop=0, quality=88, method=4)
+    edition = info["edition"].title()
+    meta = {
+        "name": f"Moodscape Mirror · {edition} · {' · '.join(info['caption'][:2])}",
+        "description": (f"A moment from a Moodscape Mirror ({edition} edition): a painting that changes as it watches "
+                        f"the face of the person looking at it, evolving toward what {'they light up at' if info['edition'] == 'bliss' else 'unsettles them'}."),
+        "image": "still.png",
+        "animation_url": "loop.webp",
+        "attributes": [{"trait_type": "Edition", "value": edition}]
+                      + [{"trait_type": k.title(), "value": v} for k, v in info["labels"].items()]
+                      + [{"trait_type": "Layout", "value": str(info["seed"])}],
+        "properties": {"prompt": info["prompt"], "layout_seed": info["seed"], "loop_frames": len(frames), "loop_fps": 12,
+                       "model": "SDXS-512-DreamShaper, one step (ONNX export skillsafeai/sdxs-512-dreamshaper-onnx-webgpu)",
+                       "model_license": "openrail++", "created": time.strftime("%Y-%m-%dT%H:%M:%S%z")},
+    }
+    (d / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    return name
 
 
 def phone_name(request):
@@ -316,7 +364,7 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
         await ws.prepare(request)
         who = phone_name(request)
         clock = time.monotonic
-        sess = mirror_mod.MirrorSession(painter.space, profiles, log=log, who=who)
+        sess = mirror_mod.MirrorSession(painter.spaces, profiles, log=log, who=who)
         st = {"inflight": 0, "seq": 0, "frames": 0, "since": time.time(), "bytes": 0, "t0": time.time(), "fps": 0.0, "last": 0.0}
         min_gap = 1.0 / max_fps
         log(f"mirror: {who} connected; {len(profiles.people)} known people")
@@ -326,8 +374,8 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                 await ws.send_str(json.dumps(obj, separators=(",", ":")))
 
         await send_json({"hello": {"host": platform.node(), "gpu": painter.gpu, "provider": painter.provider.replace("ExecutionProvider", ""),
-                                   "fps": round(painter.fps, 1), "encode_ms": round(painter.space.encode_ms),
-                                   "space": dict(zip(painter.space.slots, painter.space.labels))}})
+                                   "fps": round(painter.fps, 1), "encode_ms": round(painter.spaces["bliss"].encode_ms),
+                                   "editions": {e: math.prod(sp.sizes) for e, sp in painter.spaces.items()}}})
         await send_json({"people": sess.people()})
 
         async def render_loop():
@@ -354,17 +402,19 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                     dt = now - st["since"]
                     v = sess.viewer
                     log(f"mirror: {st['frames'] / dt:.1f} fps to {who}, {st['bytes'] / dt / 1024:.0f} KB/s, GPU {ms:.0f} ms/frame; "
-                        f"looking: {v.name + f' ({v.beats} reactions learned)' if v else 'nobody'}")
+                        f"{sess.edition}, looking: {v.name + f' ({v.taste(sess.space).beats} reactions learned)' if v else 'nobody'}")
                     st.update(frames=0, bytes=0, since=now)
 
         encoding = {"busy": False}
 
         async def encode(choice):
+            sp = sess.space
             try:
                 t0 = time.perf_counter()
-                emb = await asyncio.get_running_loop().run_in_executor(gpu_pool, painter.space.encode, choice)
-                painter.space.encode_ms = painter.space.encode_ms * 0.8 + (time.perf_counter() - t0) * 200
-                sess.arrive(choice, emb, clock())
+                emb = await asyncio.get_running_loop().run_in_executor(gpu_pool, sp.encode, choice)
+                sp.encode_ms = sp.encode_ms * 0.8 + (time.perf_counter() - t0) * 200
+                if sp is sess.space:
+                    sess.arrive(choice, emb, clock())
             except Exception as e:
                 log(f"mirror: encoding a painting failed ({e!r})")
                 await asyncio.sleep(0.5)
@@ -390,6 +440,30 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                     log(f"mirror: control step failed ({e!r})")
                 await asyncio.sleep(0.05)
 
+        keeping = {"busy": False}
+
+        async def keep():
+            """Save what's on screen as a keepsake: still.png, a seamless loop.webp and metadata.json. No face data."""
+            info = sess.keep()
+            if info is None or keeping["busy"]:
+                return
+            keeping["busy"] = True
+            await send_json({"keeping": True})
+            try:
+                loop = asyncio.get_running_loop()
+                still, frames, ms = await loop.run_in_executor(gpu_pool, painter.keepsake, info["emb"], info["seed"])
+                name = await loop.run_in_executor(None, save_keepsake, info, still, frames)
+                log(f"mirror: kept '{' · '.join(info['caption'])}' ({info['edition']}, layout {info['seed']}): "
+                    f"{len(frames)}-frame loop rendered in {ms / 1000:.1f} s, saved to captures/{name}")
+                base = f"/api/capture/{name}/"
+                await send_json({"kept": {"name": name, "caption": info["caption"], "edition": info["edition"],
+                                          "still": base + "still.png", "loop": base + "loop.webp", "meta": base + "metadata.json"}})
+            except Exception as e:
+                log(f"mirror: keeping a moment failed ({e!r})")
+                await send_json({"kept": {"error": str(e)}})
+            finally:
+                keeping["busy"] = False
+
         tasks = [asyncio.create_task(render_loop()), asyncio.create_task(control_loop())]
         try:
             async for msg in ws:
@@ -403,9 +477,11 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                         st["inflight"] = max(0, st["inflight"] - 1)
                     if "s" in d:
                         sess.on_sample(d["s"], clock())
-                    if "id" in d:
+                    if "id" in d and "cmd" not in d:
                         sess.on_identity(d["id"], clock())
-                    if "cmd" in d:
+                    if d.get("cmd") == "keep":
+                        asyncio.create_task(keep())
+                    elif "cmd" in d:
                         if d["cmd"] != "people":
                             sess.command(d, clock())
                         await send_json({"people": sess.people()})
@@ -419,6 +495,15 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
             profiles.save(force=True)
             log(f"mirror: {who} disconnected; profiles saved")
         return ws
+
+    async def capture_file(request):
+        name, file = request.match_info["name"], request.match_info["file"]
+        if not re.fullmatch(r"[a-z]+-\d{8}-\d{6}-[a-z0-9-]{1,40}", name) or file not in KEEP_FILES:
+            raise web.HTTPNotFound()
+        path = CAPTURES / name / file
+        if not path.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(path, headers={"Content-Type": KEEP_FILES[file], "Cache-Control": "no-store"})
 
     async def static(request):
         rel = request.match_info.get("path", "") or "index.html"
@@ -436,6 +521,7 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
     app.router.add_get("/api/stream", stream)
     if profiles is not None:
         app.router.add_get("/api/mirror", mirror_stream)
+        app.router.add_get("/api/capture/{name}/{file}", capture_file)
         async def save_profiles(_app):
             profiles.save(force=True)
         app.on_shutdown.append(save_profiles)
@@ -521,15 +607,18 @@ def main():
     ap.add_argument("--motion", type=float, default=1.0, help="how much the scene gently moves on its own, 0–1 (default 1)")
     ap.add_argument("--no-benchmark", action="store_true", help="skip the startup speed test")
     ap.add_argument("--qr", choices=["moodscape", "mirror"], default="moodscape", help="which app the phone QR code opens")
-    ap.add_argument("--space", default=str(HERE / "mirror-space.txt"), help="the Mirror's sections of options")
+    ap.add_argument("--bliss", default=str(HERE / "mirror-bliss.txt"), help="the Bliss edition's sections of options")
+    ap.add_argument("--unease", default=str(HERE / "mirror-unease.txt"), help="the Unease edition's sections of options")
     ap.add_argument("--profiles", default=str(HERE / "profiles.json"), help="where the Mirror keeps the people it knows")
     a = ap.parse_args()
     if not (APP_DIR / "index.html").exists():
         raise SystemExit(f"index.html not found in {APP_DIR}; keep this folder inside the moodscape repo")
     painter = Painter(pick_providers(a.cpu), a.motion)
-    painter.space = mirror_mod.Space(a.space, log)
-    painter.space.attach_encoder(MODEL_DIR, download, providers=painter.unet.get_providers())
-    profiles = mirror_mod.Profiles(a.profiles, painter.space, log)
+    bliss, unease = mirror_mod.Space(a.bliss, log, "bliss"), mirror_mod.Space(a.unease, log, "unease")
+    bliss.attach_encoder(MODEL_DIR, download, providers=painter.unet.get_providers())
+    unease.attach_encoder(MODEL_DIR, download, share=bliss)   # one text encoder on the GPU for both editions
+    painter.spaces = {"bliss": bliss, "unease": unease}
+    profiles = mirror_mod.Profiles(a.profiles, log)
     if not a.no_benchmark:
         painter.benchmark()
     gpu_pool = ThreadPoolExecutor(max_workers=1)  # one GPU, one frame at a time

@@ -20,12 +20,16 @@
   --line:rgba(243,239,230,.16);
   --chip:rgba(10,11,16,.6);
   --gold:#d9b66b;
+  --frame:linear-gradient(140deg,#5d4519 0%,#c9a45a 18%,#f3dc9c 30%,#9b7633 46%,#e8c87f 62%,#7a5a24 80%,#d2ae62 100%);
+  --glowc:255,214,150;
   --spill:40,44,60;           /* average colour of the painting, set from script */
   --glow:0;                   /* 0..1, how much the viewer is lighting up */
   --f-display:"Young Serif", Georgia, "Times New Roman", serif;
   --f-ui:"Bricolage Grotesque", system-ui, -apple-system, "Segoe UI", sans-serif;
   color-scheme:dark;
 }
+/* Unease: a tarnished silver frame, a colder wall, and the glass glows pale when it's working */
+body.unease{--gold:#b9c2c9;--frame:linear-gradient(140deg,#1d2124 0%,#6d767c 20%,#c6ced3 32%,#3b4246 50%,#8f989e 66%,#23282b 84%,#5a6268 100%);--glowc:190,220,235;--bg:#050607}
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--ink);font:14px var(--f-ui);overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
 [hidden]{display:none!important}
@@ -46,14 +50,26 @@ button{font:inherit;color:inherit}
 .tools{display:flex;gap:6px;flex:none}
 .chip{display:inline-flex;align-items:center;min-height:36px;padding:0 13px;border-radius:999px;border:1px solid var(--line);background:var(--chip);font:500 .8rem/1 var(--f-ui);cursor:pointer}
 .chip:disabled{opacity:.4;cursor:default}
+@media (max-width:360px){.chip{padding:0 10px;font-size:.76rem}}
+.toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:flex;align-items:center;gap:10px;
+  max-width:calc(100vw - 32px);padding:8px 14px 8px 8px;border-radius:14px;border:1px solid var(--line);background:rgba(10,11,16,.94);font-size:.84rem;box-shadow:0 10px 30px rgba(0,0,0,.5)}
+.toast img{width:44px;height:44px;border-radius:8px;object-fit:cover;flex:none}
+.toast a{color:var(--gold)}
+.consent{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:start;padding:12px;border-radius:12px;border:1px solid var(--line);cursor:pointer}
+.consent input{width:20px;height:20px;margin:1px 0 0;accent-color:var(--gold)}
+.consent b{display:block;margin-bottom:3px}
+.consent span{color:var(--ink-dim);font-size:.84rem;line-height:1.45}
+.card .row2{display:flex;gap:10px;flex-wrap:wrap}
+.card .row2 .btn{flex:1 1 8rem}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
 .chip:focus-visible,.btn:focus-visible,.who-name:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 
 /* the mirror */
 .mirror{position:relative;width:min(100%, calc((100dvh - 230px) * .8), 640px);aspect-ratio:4/5;padding:11px;
   border-radius:50% 50% 16px 16px / 34% 34% 16px 16px;
-  background:linear-gradient(140deg,#5d4519 0%,#c9a45a 18%,#f3dc9c 30%,#9b7633 46%,#e8c87f 62%,#7a5a24 80%,#d2ae62 100%);
+  background:var(--frame);
   box-shadow:0 30px 70px -20px rgba(0,0,0,.85),0 0 0 1px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,240,200,.35),
-    0 0 calc(30px + 60px * var(--glow)) calc(-10px + 14px * var(--glow)) rgba(255,214,150,calc(.08 + .3 * var(--glow)));
+    0 0 calc(30px + 60px * var(--glow)) calc(-10px + 14px * var(--glow)) rgba(var(--glowc),calc(.08 + .3 * var(--glow)));
   transition:box-shadow .8s ease}
 .mirror::before{content:"";position:absolute;inset:5px;border-radius:inherit;border:1px solid rgba(60,40,10,.55);pointer-events:none}
 .glass{position:relative;width:100%;height:100%;border-radius:50% 50% 8px 8px / 33% 33% 8px 8px;overflow:hidden;background:#0c0d12;
@@ -62,8 +78,8 @@ button{font:inherit;color:inherit}
 .glass canvas.on{opacity:1}
 .glass::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:inherit;
   background:linear-gradient(115deg,rgba(255,255,255,.11) 0%,rgba(255,255,255,0) 28%,rgba(255,255,255,0) 70%,rgba(255,255,255,.05) 100%),
-    radial-gradient(ellipse at 50% 55%,rgba(255,226,170,calc(.16 * var(--glow))),transparent 65%);
-  box-shadow:inset 0 0 calc(30px + 50px * var(--glow)) rgba(255,220,160,calc(.05 + .25 * var(--glow)));transition:box-shadow .8s ease}
+    radial-gradient(ellipse at 50% 55%,rgba(var(--glowc),calc(.16 * var(--glow))),transparent 65%);
+  box-shadow:inset 0 0 calc(30px + 50px * var(--glow)) rgba(var(--glowc),calc(.05 + .25 * var(--glow)));transition:box-shadow .8s ease}
 .mist{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:24px;color:var(--ink-dim);font:400 1rem/1.5 var(--f-display);transition:opacity 1s}
 
 .foot{justify-self:stretch;display:grid;gap:10px;transition:opacity .4s}
@@ -127,6 +143,7 @@ pre.log{margin:0;font:400 .66rem/1.55 ui-monospace,"SF Mono",Menlo,Consolas,mono
       <b id="whoName">Mirror</b><span id="whoSub">Connecting to your laptop…</span>
     </button>
     <div class="tools">
+      <button class="chip" id="btnEdition" type="button" title="Switch between the Bliss and Unease editions">Unease</button>
       <button class="chip" id="btnPeople" type="button" aria-expanded="false" aria-controls="people">People</button>
       <button class="chip" id="btnCalm" type="button">Hide</button>
     </div>
@@ -143,7 +160,8 @@ pre.log{margin:0;font:400 .66rem/1.55 ui-monospace,"SF Mono",Menlo,Consolas,mono
     <div class="caption" id="caption" aria-live="polite"></div>
     <div class="line">
       <div class="state" id="state"><span class="dot"></span><span class="txt" id="stateTxt">Not connected</span></div>
-      <button class="chip" id="btnNext" type="button" disabled title="Show something else (counts as a mild no)">Something else</button>
+      <button class="chip" id="btnNext" type="button" disabled title="Show something else (counts as a no for this painting)">Skip</button>
+      <button class="chip" id="btnKeep" type="button" disabled title="Keep this moment: a still, a living loop and its recipe">Keep</button>
       <div class="eye" id="eye" aria-hidden="true"><video id="video" playsinline muted autoplay></video></div>
     </div>
   </footer>
@@ -155,18 +173,34 @@ pre.log{margin:0;font:400 .66rem/1.55 ui-monospace,"SF Mono",Menlo,Consolas,mono
     <button class="chip" id="btnClose" type="button">Close</button>
   </div>
   <label class="switch" for="learnOn"><input type="checkbox" id="learnOn" checked> Learn from reactions</label>
-  <div class="sub">Each person gets their own taste. Every painting is built from a place, a detail, a time, weather, colours, a style and a framing, and the mirror learns which of those each face lights up at. Bars show the strongest so far: longer means a bigger reaction, fainter means it isn't sure yet. Names, face fingerprints and tastes are stored only on your laptop.</div>
+  <div class="sub">Each person gets their own taste in each edition. Every painting is built from a subject, a place, a detail, the time, weather, light, colours, a style and a framing. In Bliss the bars show what each face lights up at; in Unease, what makes it tense up. Longer means a bigger reaction; fainter means it isn't sure yet. Everything is stored only on your laptop.</div>
   <div id="peopleList" class="sub">Nobody yet.</div>
   <div class="sub"><b>What it's deciding</b></div>
   <pre class="log" id="log"></pre>
 </section>
+
+<div class="toast" id="toast" hidden role="status"></div>
+
+<div class="intro" id="uneaseCard" hidden>
+  <div class="card" role="dialog" aria-labelledby="uneaseTitle">
+    <div class="eyebrow">The other edition</div>
+    <h1 id="uneaseTitle">Unease</h1>
+    <p>This mirror is designed to unsettle you. It shows eerie, uncanny, empty places and changes toward whatever makes you tense up while you keep watching. Nothing gory or violent.</p>
+    <p class="fine">Tap <b>Bliss</b> at the top at any time to go back. What it learns here is kept separately from Bliss.</p>
+    <div class="row2"><button class="btn" id="btnUneaseGo" type="button">Enter Unease</button><button class="btn ghost" id="btnUneaseNo" type="button">Stay in Bliss</button></div>
+  </div>
+</div>
 
 <div class="intro" id="intro">
   <div class="card" role="dialog" aria-labelledby="introTitle">
     <div class="eyebrow">Moodscape</div>
     <h1 id="introTitle">The Mirror</h1>
     <p>A painting that changes for whoever is looking at it. It recognizes you, and every few seconds it changes something: the place, the light, the weather, the colours, the style. It watches your face: what you warm to stays, what you cool on is undone. The longer you look, the more it becomes yours.</p>
-    <p class="fine">The painting is made live on your laptop. This phone sends your laptop only numbers: your expression about 12 times a second, and a face fingerprint (128 numbers) every couple of seconds so it knows who you are. No video or photos leave the phone.</p>
+    <p class="fine">The painting is made live on your laptop. This phone sends it only numbers about your expression, about 14 times a second. No video or photos leave the phone.</p>
+    <label class="consent" for="faceId">
+      <input type="checkbox" id="faceId">
+      <div><b>Recognize faces</b><span>So several people can share this mirror, each with their own painting. If you agree, a face fingerprint (128 numbers) is computed on this phone, sent to your laptop, and stored there with your name and taste until you tap Forget in People. It isn't used for anything else or shared. Leave this off and the mirror simply belongs to this phone; no fingerprint is made.</span></div>
+    </label>
     <div class="err" id="introErr" hidden></div>
     <button class="btn" id="btnStart" type="button">Look into the mirror</button>
   </div>
@@ -183,6 +217,15 @@ const CFG = {
   idSettledMs: 3000,      // …and once it knows (still checking, in case someone else steps in)
 };
 const PC_KEY = "moodscape-mirror-pc";
+const DEVICE_KEY = "moodscape-mirror-device";
+function deviceId() {   // a random id for this phone, used instead of a face when recognition is off
+  let id = ""; try { id = localStorage.getItem(DEVICE_KEY) || ""; } catch {}
+  if (!/^[A-Za-z0-9-]{8,40}$/.test(id)) {
+    id = "phone-" + Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, "0")).join("");
+    try { localStorage.setItem(DEVICE_KEY, id); } catch {}
+  }
+  return id;
+}
 const $ = (s) => document.querySelector(s);
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 
@@ -223,9 +266,13 @@ function connect() {
   try { ws = new WebSocket(url); } catch (e) { return retry(e.message); }
   ws.binaryType = "arraybuffer";
   net.ws = ws;
-  ws.onopen = () => { net.open = true; net.tries = 0; logLine("connected to the painter"); $("#btnNext").disabled = false; };
+  ws.onopen = () => {
+    net.open = true; net.tries = 0; logLine("connected to the painter"); $("#btnNext").disabled = $("#btnKeep").disabled = false;
+    if (cam.on && !cam.faceIdOn) send({ cmd: "device", device: deviceId() });
+    if (wantEdition !== "bliss") send({ cmd: "edition", edition: wantEdition });
+  };
   ws.onmessage = (ev) => (typeof ev.data === "string" ? onJson(ev.data) : onFrame(ev.data));
-  ws.onclose = () => { if (net.ws === ws) { net.open = false; net.ws = null; $("#btnNext").disabled = true; retry("connection closed"); } };
+  ws.onclose = () => { if (net.ws === ws) { net.open = false; net.ws = null; $("#btnNext").disabled = $("#btnKeep").disabled = true; retry("connection closed"); } };
 }
 function retry(why) {
   const wait = Math.min(10000, 1500 * 2 ** net.tries++);
@@ -253,21 +300,52 @@ function onJson(text) {
   let d; try { d = JSON.parse(text); } catch { return; }
   if (d.hello) {
     net.host = d.hello.host; net.gpu = d.hello.gpu;
-    const sizes = Object.values(d.hello.space || {}).map((l) => l.length);
-    logLine(`painting on ${d.hello.host} (${d.hello.gpu}, ${d.hello.provider}) · ${sizes.reduce((a, b) => a * b, 1).toLocaleString()} possible paintings · new ones encode in ${d.hello.encode_ms} ms`);
+    const eds = Object.entries(d.hello.editions || {}).map(([e, n]) => `${e} ${Number(n).toLocaleString()}`).join(", ");
+    logLine(`painting on ${d.hello.host} (${d.hello.gpu}, ${d.hello.provider}) · possible paintings: ${eds} · new ones encode in ${d.hello.encode_ms} ms`);
   }
   if (d.people) renderPeople(d.people);
+  if (d.keeping) toast("Keeping this moment… rendering its living loop");
+  if (d.kept) {
+    if (d.kept.error) toast(`Couldn't keep it: ${d.kept.error}`, 5000);
+    else {
+      const t = $("#toast"); t.replaceChildren();
+      const img = document.createElement("img"); img.src = painterBase() + d.kept.loop; img.alt = "";
+      const txt = document.createElement("div"); txt.textContent = `Kept: ${d.kept.caption.slice(0, 2).join(" · ")} `;
+      const a = document.createElement("a"); a.href = painterBase() + d.kept.loop; a.target = "_blank"; a.rel = "noopener"; a.textContent = "Open";
+      txt.appendChild(a); t.append(img, txt); t.hidden = false;
+      clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 7000);
+      logLine(`kept ${d.kept.name} (still, living loop and metadata saved on the laptop)`);
+    }
+  }
   if (d.status) renderStatus(d.status);
 }
 
 /* ---------- What the laptop says ---------- */
+let toastTimer = 0;
+function toast(text, ms = 4000) {
+  const t = $("#toast"); t.textContent = text; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, ms);
+}
+let wantEdition = "bliss";
+function applyEdition(ed) {
+  document.body.classList.toggle("unease", ed === "unease");
+  $("#btnEdition").textContent = ed === "unease" ? "Bliss" : "Unease";
+}
+$("#btnEdition").onclick = () => {
+  if (wantEdition === "unease") { wantEdition = "bliss"; send({ cmd: "edition", edition: "bliss" }); applyEdition("bliss"); return; }
+  $("#uneaseCard").hidden = false;
+};
+$("#btnUneaseGo").onclick = () => { $("#uneaseCard").hidden = true; wantEdition = "unease"; send({ cmd: "edition", edition: "unease" }); applyEdition("unease"); };
+$("#btnUneaseNo").onclick = () => { $("#uneaseCard").hidden = true; };
+$("#btnKeep").onclick = () => send({ cmd: "keep" });
+
 function renderStatus(s) {
   lastStatus = s;
   const who = s.who;
   if (s.seeing === "person") {
     $("#whoName").textContent = who.name;
     $("#whoSub").textContent = who.warming ? "Getting to know your resting face…"
-      : `${who.reactions} reactions learned${s.learning ? "" : " · learning paused"}${who.name.startsWith("Guest") ? " · tap to name" : ""}`;
+      : `${who.reactions} reactions learned in ${s.edition === "unease" ? "Unease" : "Bliss"}${s.learning ? "" : " · learning paused"}${who.name.startsWith("Guest") ? " · tap to name" : ""}`;
   } else if (s.seeing === "identifying") {
     $("#whoName").textContent = "Someone's here";
     $("#whoSub").textContent = "Hold still a moment…";
@@ -322,7 +400,7 @@ function renderPeople(list) {
     const max = Math.max(0.05, ...p.top.map((t) => Math.abs(t.score)));
     el.innerHTML = `<div class="top"><div><b></b><br><small></small></div><div class="acts"><button class="chip" data-act="rename" type="button">Rename</button><button class="chip" data-act="forget" type="button">Forget</button></div></div><div class="bars"></div>`;
     el.querySelector("b").textContent = p.name;
-    el.querySelector("small").textContent = `${p.reactions} reactions · ${p.moments} best moments saved · ${p.faces} face ${p.faces === 1 ? "view" : "views"}${p.pid === lastStatus?.who?.pid ? " · looking now" : ""}`;
+    el.querySelector("small").textContent = `${p.reactions} reactions in ${p.edition === "unease" ? "Unease" : "Bliss"} · ${p.moments} best moments · ${p.device ? "this phone, no face data" : `${p.faces} face ${p.faces === 1 ? "view" : "views"}`}${p.pid === lastStatus?.who?.pid ? " · looking now" : ""}`;
     const bars = el.querySelector(".bars");
     if (p.reactions < 10) bars.innerHTML = `<span style="grid-column:1/-1">Still learning what ${p.name} likes.</span>`;
     else for (const t of p.top) {
@@ -368,7 +446,7 @@ $("#mirror").onclick = () => document.body.classList.remove("calm");
 
 /* ---------- Camera, expression and identity ---------- */
 const video = $("#video");
-const cam = { on: false, landmarker: null, faceapi: null, lastDetect: 0, lastVideoTime: -1, faceAt: 0, idBusy: false, idAt: 0 };
+const cam = { on: false, faceIdOn: false, landmarker: null, faceapi: null, lastDetect: 0, lastVideoTime: -1, faceAt: 0, idBusy: false, idAt: 0 };
 
 async function start() {
   $("#btnStart").disabled = true;
@@ -384,6 +462,8 @@ async function start() {
   try { await document.documentElement.requestFullscreen?.({ navigationUI: "hide" }); } catch {}
   keepAwake();
   cam.on = true;
+  cam.faceIdOn = $("#faceId").checked;
+  if (!cam.faceIdOn) { send({ cmd: "device", device: deviceId() }); logLine("face recognition off: this mirror belongs to this phone, no fingerprint is made"); }
   setState("", "Loading face tracking…");
   try {
     const vision = await import(`${CFG.vision}/vision_bundle.mjs`);
@@ -395,7 +475,7 @@ async function start() {
   } catch (e) {
     setState("err", "Couldn't load face tracking. Check the phone's connection and reload."); logLine(`face tracking failed: ${e.message || e}`); return;
   }
-  loadIdentity();
+  if (cam.faceIdOn) loadIdentity();
   requestAnimationFrame(loop);
 }
 $("#btnStart").onclick = start;
@@ -452,6 +532,8 @@ function readFace(now) {
     (nose.x - (L.x + R.x) / 2) / half,                                              // yaw: turned away?
     (nose.y - (top.y + chin.y) / 2) / halfH - 0.15,                                 // pitch: looking down at something else?
     Math.hypot(R.x - L.x, R.y - L.y),                                               // size: leaning in
+    (avg(c, "mouthPressLeft", "mouthPressRight") + avg(c, "mouthStretchLeft", "mouthStretchRight")) / 2, // tension: pressed or stretched lips
+    avg(c, "eyeSquintLeft", "eyeSquintRight"),                                      // squint: a wince
   ];
   send({ s: s.map((v) => +v.toFixed(3)) });
   identify(now);
