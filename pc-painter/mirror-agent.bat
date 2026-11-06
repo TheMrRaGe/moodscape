@@ -1,20 +1,17 @@
 @echo off
-rem Moodscape Mirror agent for Windows. Double-click to start the Mirror painter; close this window to stop it.
-rem It also lets Claude (through this folder, via the Claude desktop app) start, stop or restart the painter
-rem and send you its QR code. See mirror_agent.py.
-rem   mirror-agent.bat autostart    also start the agent automatically when you log in to Windows
+rem Moodscape Mirror for Windows: starts the Mirror painter; close this window to stop it.
+rem The desktop icon from setup-mirror.bat runs this. It also lets Claude (through this folder, via the Claude
+rem desktop app) start, stop or restart the painter and send you its QR code. See mirror_agent.py.
+rem   mirror-agent.bat open       also open the live dashboard (it shows the QR code) once the painter is up
+rem   mirror-agent.bat autostart  also start the Mirror whenever you log in (setup-mirror.bat does this too)
 cd /d "%~dp0"
+title Moodscape Mirror
+set OPEN=
+if /i "%~1"=="open" set OPEN=--open
 if /i "%~1"=="autostart" (
-  powershell -NoProfile -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Startup')+'\Moodscape Mirror agent.lnk'); $s.TargetPath='%~f0'; $s.WorkingDirectory='%~dp0'; $s.WindowStyle=7; $s.Save()"
-  echo The Mirror agent will now start, minimized, whenever you log in. To undo, delete "Moodscape Mirror agent" from shell:startup.
+  powershell -NoProfile -Command "$s=(New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Startup')+'\Moodscape Mirror.lnk'); $s.TargetPath='%~f0'; $s.WorkingDirectory='%~dp0'; $s.WindowStyle=7; $s.Save()"
+  echo The Mirror will now start, minimized, whenever you log in. To undo: setup-mirror.bat remove
 )
-where py >nul 2>nul && (set PY=py -3) || (set PY=python)
-if not exist .venv (
-  echo Setting up Python environment, first run only...
-  %PY% -m venv .venv || (echo Python 3.10 or newer is needed: https://www.python.org/downloads/ & pause & exit /b 1)
-)
-call .venv\Scripts\activate.bat
-echo Installing painter libraries, first run takes a minute...
-python -m pip install -q --disable-pip-version-check numpy pillow onnxruntime-directml aiohttp qrcode
-python mirror_agent.py
-pause
+call "%~dp0env-windows.bat" || (pause & exit /b 1)
+python mirror_agent.py %OPEN%
+if errorlevel 1 pause

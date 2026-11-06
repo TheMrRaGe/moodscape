@@ -5,9 +5,12 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.net.wifi.WifiManager;
+import android.os.SystemClock;
 import android.os.Bundle;
 import android.view.View;
 import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -17,6 +20,11 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import java.io.InputStream;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetSocketAddress;
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.util.regex.Pattern;
 
 /**
@@ -25,12 +33,79 @@ import java.util.regex.Pattern;
  * The page is served from https://appassets.androidplatform.net/ so it counts as a secure page, which the camera
  * needs. The painting itself is made on the laptop running the PC painter; the page connects to it over the
  * address the user scans or pastes (or a moodscape://pair?pc=... link).
+ *
+ * It also listens on the local Wi-Fi for the painter's announcement (a small UDP broadcast on port 47823 with the
+ * laptop's local address and its current public link), so after the first time it finds the laptop by itself,
+ * even though the public link changes every time the painter restarts. The page asks for it through
+ * window.MoodscapeNative.beacon().
  */
 public class MainActivity extends Activity {
     static final String HOST = "appassets.androidplatform.net";
     static final Pattern SAFE_PC = Pattern.compile("^https?://[A-Za-z0-9.-]+(:\\d+)?/?$");
+    static final int BEACON_PORT = 47823;
     WebView web;
     PermissionRequest pending;
+    volatile String beaconMsg = "", beaconFrom = "";
+    volatile long beaconAt = 0;
+    volatile boolean listening = false;
+    Thread listener;
+    WifiManager.MulticastLock wifiLock;
+
+    /** What the page can ask the app: the last announcement heard from a painter on this Wi-Fi. */
+    public class Bridge {
+        @JavascriptInterface
+        public String beacon() {
+            if (beaconAt == 0) return "";
+            long age = SystemClock.elapsedRealtime() - beaconAt;
+            return "{\"msg\":" + beaconMsg + ",\"from\":\"" + beaconFrom + "\",\"age\":" + age + "}";
+        }
+
+        @JavascriptInterface
+        public String version() { return "1.3"; }
+    }
+
+    void startListening() {
+        if (listening) return;
+        listening = true;
+        try {
+            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+            if (wm != null) { wifiLock = wm.createMulticastLock("moodscape-beacon"); wifiLock.setReferenceCounted(false); wifiLock.acquire(); }
+        } catch (Exception ignored) { }   // some phones drop broadcasts without this lock; without it we may hear nothing
+        listener = new Thread(() -> {
+            byte[] buf = new byte[1500];
+            while (listening) {
+                try (DatagramSocket sock = new DatagramSocket(null)) {
+                    sock.setReuseAddress(true);
+                    sock.setBroadcast(true);
+                    sock.bind(new InetSocketAddress(BEACON_PORT));
+                    sock.setSoTimeout(1000);
+                    while (listening) {
+                        DatagramPacket pk = new DatagramPacket(buf, buf.length);
+                        try { sock.receive(pk); } catch (SocketTimeoutException t) { continue; }
+                        String msg = new String(pk.getData(), 0, pk.getLength(), StandardCharsets.UTF_8);
+                        // only a painter's announcement: a small JSON object starting with its name; the page parses it
+                        if (pk.getLength() < 1200 && msg.startsWith("{\"app\":\"moodscape-mirror\"") && msg.endsWith("}")
+                                && pk.getAddress() != null && pk.getAddress().getAddress().length == 4) {
+                            beaconMsg = msg;
+                            beaconFrom = pk.getAddress().getHostAddress();
+                            beaconAt = SystemClock.elapsedRealtime();
+                        }
+                    }
+                } catch (Exception e) {
+                    try { Thread.sleep(3000); } catch (InterruptedException ie) { return; }
+                }
+            }
+        }, "beacon");
+        listener.setDaemon(true);
+        listener.start();
+    }
+
+    void stopListening() {
+        listening = false;
+        if (listener != null) listener.interrupt();
+        listener = null;
+        try { if (wifiLock != null && wifiLock.isHeld()) wifiLock.release(); } catch (Exception ignored) { }
+    }
 
     @Override
     protected void onCreate(Bundle state) {
@@ -48,6 +123,9 @@ public class MainActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(false);
         s.setAllowContentAccess(false);
+        // the painter on this Wi-Fi is plain http://192.168.x.x:8765 (only the public link has https)
+        s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+        web.addJavascriptInterface(new Bridge(), "MoodscapeNative");
 
         web.setWebViewClient(new WebViewClient() {
             @Override
@@ -150,10 +228,10 @@ public class MainActivity extends Activity {
     }
 
     @Override
-    protected void onResume() { super.onResume(); web.onResume(); }
+    protected void onResume() { super.onResume(); web.onResume(); startListening(); }
 
     @Override
-    protected void onPause() { web.onPause(); super.onPause(); }
+    protected void onPause() { stopListening(); web.onPause(); super.onPause(); }
 
     @SuppressWarnings("deprecation")
     @Override

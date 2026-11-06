@@ -119,10 +119,18 @@ laptop:  who is it?      a known fingerprint, a new "Guest", or, with recognitio
          paint it        SDXS one step per frame, melting between prompt embeddings; layouts slerp  ──► JPEG stream
 ```
 
+**Set it up once (Windows):** double-click **`pc-painter/setup-mirror.bat`**. It:
+- installs what the painter needs (first time only),
+- puts a **Moodscape Mirror** icon on the desktop,
+- makes the Mirror start, minimized, whenever you log in,
+- asks Windows (one administrator prompt) to let phones on your home Wi-Fi reach the painter directly. The rule covers only port 8765, only from your own local network, and only on networks Windows calls Private.
+
+Then it starts the Mirror. From then on, double-click the desktop icon: it starts the painter, or, if it's already running, just opens the **dashboard**, which shows the QR code and links for your phone. `setup-mirror.bat noautostart` skips starting at login, and `setup-mirror.bat remove` undoes the setup (people and captures are kept).
+
 **Run it:**
 
-1. On the laptop, double-click **`pc-painter/mirror-windows.bat`** (on Linux/macOS: `./pc-painter/mirror.sh`). At startup it prints the frame rate and how long a new painting takes to encode.
-2. Scan the QR code with your Android phone and open it in Chrome. Choose whether it may recognize faces, tap **Look into the mirror** and allow the camera.
+1. On the laptop, use the desktop icon (or double-click **`pc-painter/mirror-windows.bat`**; on Linux/macOS: `./pc-painter/mirror.sh`). At startup it prints the frame rate and how long a new painting takes to encode.
+2. Open the Moodscape Mirror app (below). On the same Wi-Fi it finds the laptop by itself. Otherwise, scan the QR code with your Android phone and open it in Chrome. Choose whether it may recognize faces, tap **Look into the mirror** and allow the camera.
 3. Hold still for a couple of seconds while it learns your resting face. With recognition on, it meets you as "Guest 1"; tap the name to rename yourself.
 
 You can also try it on the laptop with its own webcam: `http://localhost:8765/mirror.html`.
@@ -166,7 +174,8 @@ It also sends this to the laptop, which logs it and saves it in `pc-painter/stat
 **Let Claude run it (the Mirror agent):** double-click **`pc-painter/mirror-agent.bat`** instead of `mirror-windows.bat`. It starts the painter and keeps it running, and lets anything with access to the folder (such as Claude in the desktop app) start, stop or restart it by writing one line to `pc-painter/control/command.txt`. The accepted commands are `start`, `stop`, `restart` and `status`, plus a few safe painter options such as `--gpu 1` or `--max-fps 15`; anything else is refused. It also lets Claude pick up the QR code and read the log:
 - The painter's output goes to `pc-painter/status/painter.log`.
 - When its link is up, the painter saves `status/qr.png` and `status/link.json`.
-- `mirror-agent.bat autostart` also makes it start, minimized, whenever you log in.
+- `mirror-agent.bat open` also opens the dashboard once the painter is up. This is what the desktop icon runs.
+- Only one agent runs at a time. Starting a second one opens the dashboard and leaves the running one alone.
 
 Closing its window stops everything.
 
@@ -189,14 +198,16 @@ Nothing about the viewer goes into a capture.
 **Android app:** `android/` builds **Moodscape Mirror**, a small app (about 90 KB) that holds the Mirror page and opens it full screen. It asks for the camera when you start, and keeps the screen awake.
 1. Get `moodscape-mirror.apk` onto the phone. The painter serves the copy in `android/` at `<its link>/mirror.apk` and prints that address at startup, so you can open it in the phone's browser.
 2. Open it. Android asks you to allow installs from your browser once.
-3. In the app, tap **Scan the QR code** and point it at the code `mirror-windows.bat` prints, or paste the link.
+3. Open it. **On the same Wi-Fi as the laptop, it finds the painter by itself.** Away from home, tap **Scan the QR code** and point it at the code on the laptop's dashboard (or the one the painter prints), or paste the link.
 
-The app remembers the laptop. When the painter restarts, its link changes: the app notices and asks you to scan again (**People → Change laptop** also does it). The painting still happens on the laptop; the app is the phone's half.
+How it finds the laptop: every 2 seconds the painter announces itself on the local network (a UDP broadcast on port 47823) with its local address and its current public link. The broadcast never leaves your network; `--no-beacon` turns it off. On the same Wi-Fi, the app connects straight over the network, which is faster than the internet link. It also saves the newest public link for when you leave. When the painter restarts, the app finds it again. Away from home after a restart, the public link has changed, so scan the new QR code (**People → Change laptop**).
+
+**Starts by itself:** after the first time, opening the app starts the camera right away with your earlier face-recognition choice. Turn that off in **People → Start by itself when I open the mirror**. The painting still happens on the laptop; the app is the phone's half.
 
 To rebuild after changing `mirror.html`, run `ANDROID_HOME=… bash android/build.sh <versionCode> <versionName>` (see the top of the script for what it needs). The first build makes a signing key in `android/` (git-ignored). Keep it: Android only installs an update over the old app if it's signed with the same key.
 
 **Notes:**
-- The link changes every time the script restarts, so scan the new QR code then.
+- The public link changes every time the painter restarts. The app picks up the new one by itself on the same Wi-Fi; elsewhere, scan the new QR code.
 - Speed is whatever the laptop's GPU manages; under 6 fps it looks like a slow dissolve. Up to four frames are in flight at once, so the tunnel's round trip doesn't cap the frame rate.
 - `start-windows.bat` still works exactly as before for the mood app. Both apps share the one painter.
 

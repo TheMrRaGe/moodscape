@@ -11,6 +11,7 @@ turns those into frames as fast as its GPU allows and streams them back.
     python painter_server.py --cpu        # force CPU (very slow; for testing)
     python painter_server.py --max-fps 15 --motion 0.5
     python painter_server.py --qr mirror  # the QR code opens the Mirror instead of Moodscape
+    python painter_server.py --no-beacon  # don't announce this PC on the local Wi-Fi
 
 Mirror mode (mirror.html + mirror.py): the phone sends face numbers (and, if the viewer agreed, a face
 fingerprint); this PC works out who is looking and evolves a painting in real time toward what that person
@@ -333,7 +334,8 @@ async def cors(request, handler):
     if request.path.startswith("/api/") and not isinstance(resp, web.WebSocketResponse):
         resp.headers.update({"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "content-type",
                              "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Expose-Headers": "X-Paint-Ms",
-                             "Access-Control-Max-Age": "600", "Cache-Control": "no-store"})
+                             "Access-Control-Max-Age": "600", "Cache-Control": "no-store",
+                             "Access-Control-Allow-Private-Network": "true"})   # the app reaching this PC over the local Wi-Fi
     return resp
 
 
@@ -684,10 +686,84 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
         async def save_profiles(_app):
             profiles.save(force=True)
         app.on_shutdown.append(save_profiles)
+    async def link(request):
+        """For the dashboard on this PC: how a phone connects (the QR code, the public link, the local address)."""
+        if not is_local(request):
+            raise web.HTTPNotFound()
+        port = request.url.port or 8765
+        return web.json_response({"tunnel": LINK["tunnel"], "lan": [f"http://{ip}:{port}" for ip in lan_addresses()],
+                                  "qr": LINK["tunnel"] is not None and (HERE / "status" / "qr.png").is_file(),
+                                  "apk": APK.is_file(), "host": platform.node()})
+
+    async def qr_png(request):
+        f = HERE / "status" / "qr.png"
+        if not is_local(request) or not f.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(f, headers={"Cache-Control": "no-store"})
+
+    app.router.add_get("/api/link", link)
+    app.router.add_get("/api/qr.png", qr_png)
     app.router.add_get("/mirror.apk", apk)
     app.router.add_get("/", static)
     app.router.add_get("/{path:.*}", static)
     return app
+
+
+# ---------------------------------------------------------------- finding this PC on the local Wi-Fi
+
+BEACON_PORT = 47823          # UDP; the Android app listens for this
+LINK = {"tunnel": None}      # the current public (Cloudflare) address, once it's up
+
+
+def lan_addresses():
+    """This PC's addresses on the local network (no packets are sent: connecting a UDP socket just picks a route)."""
+    found = []
+    for probe in ("192.168.0.1", "10.0.0.1", "172.16.0.1", "8.8.8.8"):
+        try:
+            with __import__("socket").socket(2, 2) as u:   # AF_INET, SOCK_DGRAM
+                u.connect((probe, 9)); ip = u.getsockname()[0]
+            if ip not in found and not ip.startswith(("127.", "0.", "169.254.")):
+                found.append(ip)
+        except OSError:
+            pass
+    return found
+
+
+def beacon_message(port):
+    return json.dumps({"app": "moodscape-mirror", "v": 1, "port": port, "lan": lan_addresses(),
+                       "tunnel": LINK["tunnel"], "host": platform.node()[:40]}, separators=(",", ":")).encode()
+
+
+def start_beacon(port, every=2.0):
+    """Every couple of seconds, tell phones on the same Wi-Fi where this PC is: its local address and its current
+    public link. The Moodscape Mirror app listens for this, so it finds the painter by itself after a restart,
+    with no QR code. It goes only to this local network (a broadcast), never to the internet."""
+    import socket
+    def run():
+        said_ok = said_err = False
+        while True:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:
+                    u.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    msg = beacon_message(port); lan = json.loads(msg)["lan"]
+                    u.sendto(msg, ("255.255.255.255", BEACON_PORT))
+                    for ip in lan:      # also each subnet's own broadcast (some routers drop the global one)
+                        u.sendto(msg, (ip.rsplit(".", 1)[0] + ".255", BEACON_PORT))
+                if not said_ok:
+                    log(f"beacon: announcing this PC on the local Wi-Fi ({', '.join(lan) or 'no network yet'}) "
+                        "so the Android app finds it by itself"); said_ok, said_err = True, False
+                time.sleep(every)
+            except OSError as e:
+                if not said_err:
+                    log(f"beacon: couldn't announce on the local network ({e}); the app can still use the QR code")
+                    said_ok, said_err = False, True
+                time.sleep(15)
+    threading.Thread(target=run, daemon=True, name="beacon").start()
+
+
+def is_local(request):
+    """Asked on this PC itself, not through the tunnel (which also arrives from localhost, but with Cloudflare's headers)."""
+    return request.remote in ("127.0.0.1", "::1") and "Cf-Connecting-Ip" not in request.headers and "Cf-Ray" not in request.headers
 
 
 # ---------------------------------------------------------------- tunnel
@@ -728,6 +804,7 @@ def start_tunnel(port, which):
             if m:
                 show_link(m.group(0), which)
         log("tunnel: cloudflared exited; the phone link has stopped working. Restart this script.")
+        LINK["tunnel"] = None
         (HERE / "status" / "link.json").unlink(missing_ok=True)
     threading.Thread(target=watch, daemon=True).start()
     return proc
@@ -750,6 +827,7 @@ def write_link_status(url, target, which):
 
 
 def show_link(url, which="moodscape"):
+    LINK["tunnel"] = url
     pair = f"{APP_URL}#pc={url}"
     mirror_url = f"{url}/mirror.html"
     target = mirror_url if which == "mirror" else pair
@@ -784,6 +862,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-tunnel", action="store_true", help="don't open a Cloudflare tunnel")
+    ap.add_argument("--no-beacon", action="store_true", help="don't announce this PC on the local Wi-Fi for the Android app")
     ap.add_argument("--cpu", action="store_true", help="force CPU instead of the graphics card")
     ap.add_argument("--gpu", type=int, default=None, help="Windows: which graphics adapter to use (they're listed at startup)")
     ap.add_argument("--max-fps", type=float, default=24, help="cap the stream's frame rate (default 24)")
@@ -810,6 +889,8 @@ def main():
     log(f"server: Mirror on http://localhost:{a.port}/mirror.html (works with this PC's own webcam too)")
     log(f"server: live dashboard (what it reads, where it's leaning, accuracy) on http://localhost:{a.port}/dashboard.html")
     tunnel = None if a.no_tunnel else start_tunnel(a.port, a.qr)
+    if not a.no_beacon:
+        start_beacon(a.port)
     try:
         web.run_app(make_app(painter, gpu_pool, a.max_fps, profiles), host="0.0.0.0", port=a.port, print=None)
     finally:

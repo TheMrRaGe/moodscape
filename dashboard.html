@@ -43,6 +43,12 @@ canvas{width:100%;display:block}
 .tabs{display:flex;gap:6px;flex-wrap:wrap}
 .tabs button{font:500 .8rem var(--f-ui);color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:999px;padding:4px 12px;cursor:pointer}
 .tabs button[aria-pressed="true"]{border-color:var(--gold);color:var(--gold)}
+details.connect{margin:4px max(16px,env(safe-area-inset-left,0px)) 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+details.connect summary{cursor:pointer;font:600 .7rem/1 var(--f-ui);text-transform:uppercase;letter-spacing:.14em;color:var(--gold)}
+.connect .body{display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-top:12px}
+.connect img{width:180px;height:180px;border-radius:10px;background:#fff;image-rendering:pixelated;flex:0 0 auto}
+.connect .steps{display:grid;gap:8px;font-size:.88rem;min-width:0;flex:1 1 280px}
+.connect a{color:var(--gold);word-break:break-all}
 </style>
 </head>
 <body>
@@ -51,6 +57,13 @@ canvas{width:100%;display:block}
   <div class="tabs" id="tabs"></div>
   <div class="meta" id="meta">Connecting…</div>
 </header>
+<details class="connect" id="connect" hidden open>
+  <summary>Connect a phone</summary>
+  <div class="body">
+    <img id="qr" alt="QR code for the Mirror" hidden>
+    <div class="steps" id="steps"></div>
+  </div>
+</details>
 <div class="empty" id="empty" hidden>No phone is looking into the mirror right now. Open the Mirror on your phone; this page updates by itself.</div>
 <main id="main" hidden>
   <section>
@@ -117,10 +130,33 @@ function connect() {
   ws.onopen = () => { $("#meta").textContent = "Connected"; };
   ws.onclose = () => { $("#meta").textContent = "Disconnected from the painter; retrying…"; setTimeout(connect, 2000); };
 }
+/* How a phone connects: only answered on this PC itself (not through the public link). */
+let linkKey = "", hadPhones = null;
+async function refreshLink() {
+  let L; try { const r = await fetch("/api/link", { cache: "no-store" }); if (!r.ok) return; L = await r.json(); } catch { return; }
+  const key = JSON.stringify(L); if (key === linkKey) return; linkKey = key;
+  $("#connect").hidden = false;
+  const steps = $("#steps"); steps.replaceChildren();
+  const line = (html) => { const d = el("div"); d.innerHTML = html; steps.append(d); };
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  if (L.qr) { $("#qr").src = `/api/qr.png?${Date.now()}`; $("#qr").hidden = false; } else $("#qr").hidden = true;
+  line(`<b>Moodscape Mirror app on the same Wi-Fi:</b> just open it. It finds this laptop by itself${L.lan.length ? ` (at ${L.lan.map(esc).join(", ")})` : ""}.`);
+  if (L.tunnel) {
+    line(`<b>First time, or away from home:</b> in the app tap <i>Scan the QR code</i>, or scan it with the phone's camera to open the Mirror in Chrome.`);
+    line(`Link: <a href="${esc(L.tunnel)}/mirror.html" target="_blank" rel="noopener">${esc(L.tunnel)}/mirror.html</a>`);
+    if (L.apk) line(`Get the app on the phone: <a href="${esc(L.tunnel)}/mirror.apk">${esc(L.tunnel)}/mirror.apk</a>`);
+    line(`<span class="dim">This link changes every time the painter restarts. The app picks up the new one by itself when it's on this Wi-Fi.</span>`);
+  } else {
+    line(`<span class="dim">The internet link (and its QR code) isn't up yet. It usually takes 10–30 seconds after starting.</span>`);
+  }
+}
+refreshLink(); setInterval(refreshLink, 4000);
+
 function render() {
   const L = latest, ss = L.sessions || [];
   $("#meta").textContent = `${L.gpu} · frame: painting ${L.split[0]} ms, decoding ${L.split[1]} ms, JPEG ${L.split[2]} ms · new paintings encode in ${L.encode_ms} ms`;
   $("#empty").hidden = ss.length > 0; $("#main").hidden = !ss.length;
+  if (hadPhones !== (ss.length > 0)) { hadPhones = ss.length > 0; $("#connect").open = !hadPhones; }   // folds away once a phone is watching
   const tabs = $("#tabs"); tabs.replaceChildren();
   if (ss.length > 1) ss.forEach((s, i) => { const b = el("button", "", `${s.who ? s.who.name : "nobody"} · ${s.phone_name}`);
     b.setAttribute("aria-pressed", String(i === pick)); b.onclick = () => { pick = i; render(); }; tabs.appendChild(b); });

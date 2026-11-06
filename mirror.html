@@ -201,6 +201,7 @@ pre.log{margin:0;font:400 .66rem/1.55 ui-monospace,"SF Mono",Menlo,Consolas,mono
     <button class="chip" id="btnClose" type="button">Close</button>
   </div>
   <label class="switch" for="learnOn"><input type="checkbox" id="learnOn" checked> Learn from reactions</label>
+  <label class="switch" for="autoOn"><input type="checkbox" id="autoOn" checked> Start by itself when I open the mirror</label>
   <div class="sub">Each person gets their own taste in each edition. Every painting is built from a subject, a place, a detail, the time, weather, light, colours, a style and a framing. In Bliss the bars show what each face lights up at; in Unease, what makes it tense up. Longer means a bigger reaction; fainter means it isn't sure yet. Everything is stored only on your laptop.</div>
   <div id="peopleList" class="sub">Nobody yet.</div>
   <div class="acts"><button class="chip" id="btnRepair" type="button">Change laptop</button><button class="chip" id="btnTest2" type="button">Test how well it reads me</button><button class="chip" id="btnMind2" type="button">Show its mind</button></div>
@@ -307,21 +308,50 @@ const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
    phone was paired (the Android app, or the page opened from anywhere else). */
 let PAINTER = "";
 function painterBase() { return PAINTER; }
-async function probePainter(base) {
+async function probePainter(base, ms = 5000) {
   try {
-    const r = await fetch(base + "/api/health", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+    const r = await fetch(base + "/api/health", { cache: "no-store", signal: AbortSignal.timeout(ms) });
     const j = await r.json();
     return j && j.mirror ? base : "";
   } catch { return ""; }
 }
-async function resolvePainter() {
+/* In the Android app: the laptop announces itself on the local Wi-Fi every 2 seconds (its local address and its
+   current public link), and the app hands the last announcement to this page. So on the same Wi-Fi the app finds
+   the laptop by itself, even after the painter restarts with a new public link; no QR code. */
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function heardBeacon() {
+  try {
+    const raw = window.MoodscapeNative?.beacon?.(); if (!raw) return null;
+    const b = JSON.parse(raw), m = b && b.msg;
+    if (!m || m.app !== "moodscape-mirror" || !(b.age < 15000)) return null;
+    const port = Number(m.port); if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+    const ip4 = (ip) => typeof ip === "string" && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip);
+    const ips = [...new Set([b.from, ...(Array.isArray(m.lan) ? m.lan : [])].filter(ip4))];
+    const tunnel = typeof m.tunnel === "string" && /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(m.tunnel) ? m.tunnel : "";
+    return { lan: ips.map((ip) => `http://${ip}:${port}`), tunnel, host: String(m.host || "").slice(0, 40) };
+  } catch { return null; }
+}
+async function discover(waitMs) {
+  if (!window.MoodscapeNative) return "";
+  let b = heardBeacon();
+  for (const end = Date.now() + waitMs; !b && Date.now() < end; ) { await sleep(250); b = heardBeacon(); }
+  if (!b) return "";
+  if (b.tunnel) try { localStorage.setItem(PC_KEY, b.tunnel); } catch {}   // the newest public link, for when you're away
+  for (const base of b.lan) if (await probePainter(base, 2500)) return base;   // straight over the Wi-Fi: fastest
+  if (b.tunnel && await probePainter(b.tunnel)) return b.tunnel;
+  return "";
+}
+async function resolvePainter(waitMs = 2600) {
   if (/^https?:$/.test(location.protocol) && location.hostname !== "appassets.androidplatform.net") {
     const same = await probePainter(location.origin);
     if (same) return same;
   }
+  const near = await discover(waitMs);
+  if (near) return near;
   let saved = ""; try { saved = localStorage.getItem(PC_KEY) || ""; } catch {}
   return saved;
 }
+const viaWifi = (base) => /^http:\/\/\d/.test(base);
 function extractPainter(text) {
   const t = String(text || "").trim();
   const m = t.match(/#pc=(https?:\/\/[a-z0-9.-]+(?::\d+)?)/i) || t.match(/[?&]pc=(https?:\/\/[a-z0-9.-]+(?::\d+)?)/i)
@@ -395,7 +425,17 @@ const net = { ws: null, open: false, tries: 0, host: "", gpu: "", lastFrame: 0, 
 const paint = $("#paint"), pctx = paint.getContext("2d");
 function connect() {
   const base = painterBase();
-  if (!base) { setState("err", "Not connected to your laptop yet."); showPair(); return; }
+  if (!base) {
+    setState("err", "Not connected to your laptop yet.");
+    if ($("#pairCard").hidden) showPair();
+    if (window.MoodscapeNative) setTimeout(async () => {   // keep listening: it connects as soon as the laptop is on this Wi-Fi
+      if (net.ws || PAINTER) return;
+      const found = await resolvePainter(2600);
+      if (found && !PAINTER) { PAINTER = found; logLine(`found your laptop at ${found}`); }
+      if (!net.ws) connect();
+    }, 2000);
+    return;
+  }
   const url = new URL("/api/mirror", base); url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   setState("", `Connecting to your laptop…`);
   let ws;
@@ -403,7 +443,8 @@ function connect() {
   ws.binaryType = "arraybuffer";
   net.ws = ws;
   ws.onopen = () => {
-    net.open = true; net.tries = 0; logLine("connected to the painter"); $("#btnNext").disabled = $("#btnKeep").disabled = false;
+    net.open = true; net.tries = 0; $("#pairCard").hidden = true;
+    logLine(`connected to the painter ${viaWifi(base) ? "over your Wi-Fi" : "over the internet"} (${base})`); $("#btnNext").disabled = $("#btnKeep").disabled = false;
     if (cam.on && !cam.faceIdOn) send({ cmd: "device", device: deviceId() });
     if (wantEdition !== "bliss") send({ cmd: "edition", edition: wantEdition });
   };
@@ -411,10 +452,16 @@ function connect() {
   ws.onclose = () => { if (net.ws === ws) { net.open = false; net.ws = null; $("#btnNext").disabled = $("#btnKeep").disabled = true; retry("connection closed"); } };
 }
 function retry(why) {
-  if (net.tries === 2 && $("#pairCard").hidden) showPair(`Can't reach your laptop at ${painterBase()}. If you restarted the painter, its link changed: scan the new QR code.`);
+  if (net.tries === 3 && $("#pairCard").hidden) showPair(window.MoodscapeNative
+    ? `Can't find your laptop. Is the Mirror running on it? On the same Wi-Fi this app finds it by itself; away from home, scan the QR code on its dashboard.`
+    : `Can't reach your laptop at ${painterBase()}. If you restarted the painter, its link changed: scan the new QR code.`);
   const wait = Math.min(10000, 1500 * 2 ** net.tries++);
-  setState("err", `Can't reach the painter on your laptop (${why}). Is it still running? Retrying in ${Math.round(wait / 1000)} s…`);
-  setTimeout(connect, wait);
+  setState("err", `Can't reach the painter on your laptop (${why}). Is it still running? Looking again in ${Math.round(wait / 1000)} s…`);
+  setTimeout(async () => {
+    const found = await resolvePainter(1200);   // it may have restarted with a new link, or the phone joined the Wi-Fi
+    if (found && found !== PAINTER) { logLine(`found your laptop at ${found}`); PAINTER = found; }
+    if (!net.ws) connect();
+  }, wait);
 }
 function send(obj) { if (net.open) try { net.ws.send(JSON.stringify(obj)); } catch {} }
 
@@ -703,6 +750,7 @@ async function start() {
   keepAwake();
   cam.on = true;
   cam.faceIdOn = $("#faceId").checked;
+  rememberStart();
   if (!cam.faceIdOn) { send({ cmd: "device", device: deviceId() }); logLine("face recognition off: this mirror belongs to this phone, no fingerprint is made"); }
   setState("", "Loading face tracking…");
   try {
@@ -719,6 +767,20 @@ async function start() {
   requestAnimationFrame(loop);
 }
 $("#btnStart").onclick = start;
+
+/* After the first time, the mirror starts by itself (camera on, same face-recognition choice) when it's opened.
+   Turn that off in People. */
+const AUTO_KEY = "moodscape-mirror-auto", AUTO_OFF_KEY = "moodscape-mirror-auto-off";
+function rememberStart() { try { localStorage.setItem(AUTO_KEY, JSON.stringify({ faceId: cam.faceIdOn, at: Date.now() })); } catch {} }
+function autoStartWanted() {
+  try {
+    if (localStorage.getItem(AUTO_OFF_KEY) === "1") return null;
+    const a = JSON.parse(localStorage.getItem(AUTO_KEY) || "null");
+    return a && typeof a.faceId === "boolean" ? a : null;
+  } catch { return null; }
+}
+try { $("#autoOn").checked = localStorage.getItem(AUTO_OFF_KEY) !== "1"; } catch {}
+$("#autoOn").onchange = (e) => { try { localStorage.setItem(AUTO_OFF_KEY, e.target.checked ? "0" : "1"); } catch {} };
 
 /* face-api: its emotion model always (7 probabilities; it can't tell who anyone is), and its recognition network
    (a 128-number face fingerprint) only if the viewer agreed. Loaded after expression tracking so the mirror starts
@@ -946,7 +1008,9 @@ let wakeLock = null;
 async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {} }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && cam.on) keepAwake(); });
 
+setState("", window.MoodscapeNative ? "Looking for your laptop on this Wi-Fi…" : "Finding your laptop…");
 resolvePainter().then((base) => { PAINTER = base; connect(); });
+{ const a = autoStartWanted(); if (a) { $("#faceId").checked = a.faceId; logLine("starting by itself (turn that off in People)"); start(); } }
 </script>
 </body>
 </html>

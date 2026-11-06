@@ -3,7 +3,11 @@ Moodscape Mirror agent: keeps the Mirror painter running, and lets anyone with a
 Claude, through the Claude desktop app) start, stop or restart it and pick up its QR code and log, without anyone
 at the keyboard.
 
-    python mirror_agent.py      (or double-click mirror-agent.bat)
+    python mirror_agent.py      (or double-click mirror-agent.bat, or the Moodscape Mirror desktop icon)
+    python mirror_agent.py --open    also open the live dashboard (with the QR code) once the painter is up
+
+Only one agent runs at a time: starting it again (the desktop icon, say) while it's already running just opens the
+dashboard (with --open) and leaves the running one alone.
 
 It starts the painter in Mirror mode right away, then watches control/command.txt for one of:
 
@@ -19,7 +23,7 @@ It writes:
 and the painter itself writes status/link.json and status/qr.png when its public link is up.
 Closing the agent's window stops the painter too.
 """
-import json, os, platform, re, signal, subprocess, sys, time
+import json, os, platform, re, signal, socket, subprocess, sys, time, urllib.request, webbrowser
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -27,6 +31,8 @@ CONTROL, STATUS = HERE / "control", HERE / "status"
 COMMAND = CONTROL / "command.txt"
 ALLOWED = re.compile(r"^(--gpu \d{1,2}|--max-fps \d{1,2}(\.\d+)?|--motion [01](\.\d+)?|--cpu|--no-tunnel)$")
 WINDOWS = platform.system() == "Windows"
+LOCK_PORT = 47824            # held while an agent runs, so a second one knows
+DASHBOARD = "http://localhost:8765/dashboard.html"
 
 proc, log_file, state = None, None, {"args": [], "started": None, "last_command": None, "result": "", "exit_code": None}
 
@@ -125,16 +131,56 @@ def handle(line):
     say(f"{line!r} -> {state['result']}")
 
 
+def single_instance():
+    """A socket on localhost as a lock: only one agent can hold it, and it's released when the agent exits however
+    that happens (even a crash), so a stale lock can't block the next start."""
+    lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if WINDOWS and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        lock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    try:
+        lock.bind(("127.0.0.1", LOCK_PORT)); lock.listen(1)
+        return lock
+    except OSError:
+        lock.close()
+        return None
+
+
+def painter_up():
+    try:
+        with urllib.request.urlopen("http://localhost:8765/api/health", timeout=2) as r:
+            return json.loads(r.read()).get("ok", False)
+    except Exception:
+        return False
+
+
 def main():
     CONTROL.mkdir(exist_ok=True); STATUS.mkdir(exist_ok=True)
+    words = sys.argv[1:]
+    want_open = "--open" in words
+    words = [w for w in words if w != "--open"]
+    lock = single_instance()
+    if lock is None:
+        say("the Mirror is already running (another agent window has it).")
+        if want_open:
+            say(f"opening the dashboard: {DASHBOARD}"); webbrowser.open(DASHBOARD)
+        time.sleep(3)
+        return
     # being closed (the window's X, logging off, a kill) stops the painter and its tunnel first
     for name in ("SIGTERM", "SIGBREAK", "SIGHUP"):
         if hasattr(signal, name):
             signal.signal(getattr(signal, name), lambda *_: sys.exit(0))
     say(f"watching {COMMAND} (start | stop | restart | status). Close this window to stop the painter and the agent.")
-    state["result"] = start(parse_args(sys.argv[1:]))
+    try:
+        state["result"] = start(parse_args(words))
+    except ValueError as e:
+        state["result"] = f"refused: {e}"; say(state["result"])
+    opened = not want_open
     try:
         while True:
+            if not opened and running() and painter_up():
+                opened = True
+                say(f"the painter is up; opening the dashboard (it shows the QR code for your phone): {DASHBOARD}")
+                webbrowser.open(DASHBOARD)
             if COMMAND.exists():
                 try:
                     text = COMMAND.read_text(encoding="utf-8-sig").strip()
