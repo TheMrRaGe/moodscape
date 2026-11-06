@@ -217,6 +217,7 @@ class Painter:
         self.motion = motion
         self.noise_cache = OrderedDict()
         self.count, self.fps = 0, 0.0
+        self.tweens = None     # in-between frames per painted frame; None = decide from measured speed
         log(f"painter: sessions ready on {self.provider} ({self.gpu}) in {time.time() - t0:.1f} s")
 
     def _noise(self, seed):
@@ -228,23 +229,42 @@ class Painter:
         return self.noise_cache[seed]
 
     def _run(self, emb, x):
-        img = self._image(emb, x)
+        return self._jpeg(self._image(emb, x))
+
+    def _latent(self, emb, x):
+        """The expensive part: one UNet step from noise x to the finished painting's latent (4x64x64)."""
+        t0 = time.perf_counter()
+        sample = (x / np.sqrt(SIGMA ** 2 + 1)).reshape(1, 4, 64, 64).astype(np.float32)
+        eps = self.unet.run(None, {"sample": sample, "timestep": np.array([999], np.float32),
+                                   "encoder_hidden_states": emb.reshape(1, 77, 768).astype(np.float32)})[0]
+        self.split[0] = self.split[0] * 0.8 + (time.perf_counter() - t0) * 200
+        return (x.reshape(1, 4, 64, 64) - SIGMA * eps).astype(np.float32)
+
+    def _decode(self, z):
+        """The cheap part: latent -> 512x512 picture (the tiny TAESD decoder)."""
+        t0 = time.perf_counter()
+        img = self.vae.run(None, {"latent": z})[0][0]
+        self.split[1] = self.split[1] * 0.8 + (time.perf_counter() - t0) * 200
+        return (np.clip(img / 2 + 0.5, 0, 1).transpose(1, 2, 0) * 255).astype(np.uint8)
+
+    def _image(self, emb, x):
+        return self._decode(self._latent(emb, x))
+
+    def _jpeg(self, img):
         t0 = time.perf_counter()
         buf = io.BytesIO(); Image.fromarray(img).save(buf, format="JPEG", quality=82)
         self.split[2] = self.split[2] * 0.8 + (time.perf_counter() - t0) * 200
         return buf.getvalue()
 
-    def _image(self, emb, x):
-        t0 = time.perf_counter()
-        sample = (x / np.sqrt(SIGMA ** 2 + 1)).reshape(1, 4, 64, 64).astype(np.float32)
-        eps = self.unet.run(None, {"sample": sample, "timestep": np.array([999], np.float32),
-                                   "encoder_hidden_states": emb.reshape(1, 77, 768).astype(np.float32)})[0]
-        t1 = time.perf_counter()
-        img = self.vae.run(None, {"latent": (x.reshape(1, 4, 64, 64) - SIGMA * eps).astype(np.float32)})[0][0]
-        t2 = time.perf_counter()
-        self.split[0] = self.split[0] * 0.8 + (t1 - t0) * 200
-        self.split[1] = self.split[1] * 0.8 + (t2 - t1) * 200
-        return (np.clip(img / 2 + 0.5, 0, 1).transpose(1, 2, 0) * 255).astype(np.uint8)
+    def tweens_for(self, key_every=1.0):
+        """How many in-between frames to decode per painted frame: as many as fit while still painting about one new
+        frame a second. On a slow card (UNet 500 ms, decoder 100 ms) that's 4, so the stream runs ~4x as many frames."""
+        if self.tweens is not None:
+            return self.tweens
+        u, v = self.split[0], max(self.split[1], 5.0)
+        if u <= 0 or u < 3 * v:      # fast card (or not measured yet): painting every frame is already smooth
+            return 0
+        return int(np.clip((key_every * 1000 - u) / v, 1, 8))
 
     def _living(self, seed, t, m):
         n0, n1, n2 = self._noise(int(seed) & 0x7FFFFFFF)
@@ -279,6 +299,31 @@ class Painter:
         self.fps = 1000 / ms if self.fps == 0 else self.fps * 0.9 + (1000 / ms) * 0.1
         return jpeg, ms
 
+    def frames_mirror(self, src, dst, m, seed_a, seed_b, s, t, state):
+        """A painted frame plus in-between frames: the UNet paints the next frame's latent, then the cheap decoder
+        turns points on the straight path from the previous painted latent to this one into pictures. So a card that
+        paints 2 frames a second streams several times as many, each a real step of the melt, not a crossfade.
+        Returns ([jpeg, ...], ms for the whole batch, in-betweens used)."""
+        t0 = time.perf_counter()
+        emb = dst if m >= 1 else src * (1 - m) + dst * m
+        if seed_a == seed_b or s >= 1:
+            x = self._living(seed_b, t, self.motion)
+        else:
+            x = np.cos(s * np.pi / 2) * self._living(seed_a, t, self.motion) + np.sin(s * np.pi / 2) * self._living(seed_b, t, self.motion)
+        z = self._latent(emb, x * SIGMA)
+        prev, n = state.get("z"), self.tweens_for()
+        out = []
+        if prev is not None and n > 0:
+            for i in range(1, n + 1):
+                k = i / (n + 1)
+                out.append(self._jpeg(self._decode((prev * (1 - k) + z * k).astype(np.float32))))
+        out.append(self._jpeg(self._decode(z)))
+        state["z"] = z
+        ms = (time.perf_counter() - t0) * 1000
+        self.count += len(out)
+        self.fps = len(out) * 1000 / ms if self.fps == 0 else self.fps * 0.9 + (len(out) * 1000 / ms) * 0.1
+        return out, ms, n
+
     def keepsake(self, emb, seed, frames=48):
         """A seamless living loop of one painting: the noise travels once round a closed path, so the last frame
         flows into the first. Returns (still RGB, [loop RGB frames], ms)."""
@@ -312,6 +357,11 @@ class Painter:
         feel = "smooth" if fps >= 15 else "watchable" if fps >= 6 else "choppy (a few frames a second)" if fps >= 2 else "a slow slideshow"
         log(f"painter: about {fps:.1f} frames per second on {self.gpu}, which will look {feel} "
             f"(per frame: painting {self.split[0]:.0f} ms, decoding {self.split[1]:.0f} ms, JPEG {self.split[2]:.0f} ms)")
+        n = self.tweens_for()
+        if n:
+            u, v, j = self.split
+            log(f"painter: the Mirror will decode {n} in-between frames per painted frame, streaming about "
+                f"{(n + 1) * 1000 / (u + (n + 1) * (v + j)):.1f} real frames a second; the phone blends them to its screen's rate")
         return fps
 
 
@@ -484,35 +534,52 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                                    "relay": LINK["relay"]}})   # the app keeps this to find the next link after a restart
         await send_json({"people": sess.people()})
 
+        out_q = asyncio.Queue(maxsize=1)     # one batch waiting while the GPU paints the next: the pipeline stays full
+
         async def render_loop():
+            """Paints batches (a new frame plus decoded in-betweens) back to back on the GPU."""
             loop = asyncio.get_running_loop()
-            last = 0.0
+            state = {}
             while not ws.closed:
-                # up to 4 frames in flight: over a tunnel each acknowledgement takes a round trip, and 2 capped the stream near 10 fps
                 params = sess.frame_params(clock())
-                if params is None or st["inflight"] >= 4 or time.time() - last < min_gap:
-                    await asyncio.sleep(0.004); continue
-                last = time.time()
+                if params is None:
+                    await asyncio.sleep(0.02); continue
                 try:
-                    jpeg, ms = await loop.run_in_executor(gpu_pool, painter.frame_mirror, *params, time.time() - st["t0"])
+                    frames, ms, n = await loop.run_in_executor(gpu_pool, painter.frames_mirror, *params, time.time() - st["t0"], state)
                 except Exception as e:
                     log(f"mirror: frame failed ({e})"); await asyncio.sleep(0.5); continue
-                if ws.closed: break
-                now = time.time()
-                if st["last"]:
-                    st["fps"] += (1 / max(1e-3, now - st["last"]) - st["fps"]) * 0.1
-                st["last"] = now
-                st["seq"] += 1; st["inflight"] += 1; st["frames"] += 1; st["bytes"] += len(jpeg)
-                live["jpeg"] = jpeg
-                await ws.send_bytes(struct.pack("<III", st["seq"], int(ms), 0) + jpeg)
-                if now - st["since"] >= 15:
-                    dt = now - st["since"]
-                    v = sess.viewer
-                    u, vd, j = painter.split
-                    log(f"mirror: {st['frames'] / dt:.1f} fps to {who}, {st['bytes'] / dt / 1024:.0f} KB/s, {ms:.0f} ms/frame "
-                        f"(painting {u:.0f}, decoding {vd:.0f}, JPEG {j:.0f}); "
-                        f"{sess.edition}, looking: {v.name + f' ({v.taste(sess.space).beats} reactions learned)' if v else 'nobody'}")
-                    st.update(frames=0, bytes=0, since=now)
+                st["tweens"] = n
+                await out_q.put((frames, ms))
+
+        async def send_loop():
+            """Sends each batch spread evenly over the time the next one takes to paint, so the phone gets a steady
+            stream instead of bursts. Up to 8 frames in flight (acknowledgements take a round trip over the tunnel)."""
+            batch_s = 0.5
+            while not ws.closed:
+                frames, ms = await out_q.get()
+                batch_s += (ms / 1000 - batch_s) * 0.3
+                gap = max(min_gap, batch_s / len(frames) * 0.97)
+                for jpeg in frames:
+                    t_send = time.time()
+                    while st["inflight"] >= 8 and not ws.closed:
+                        await asyncio.sleep(0.004)
+                    if ws.closed: return
+                    now = time.time()
+                    if st["last"]:
+                        st["fps"] += (1 / max(1e-3, now - st["last"]) - st["fps"]) * 0.1
+                    st["last"] = now
+                    st["seq"] += 1; st["inflight"] += 1; st["frames"] += 1; st["bytes"] += len(jpeg)
+                    live["jpeg"] = jpeg
+                    await ws.send_bytes(struct.pack("<III", st["seq"], int(ms), int(gap * 1000)) + jpeg)
+                    if now - st["since"] >= 15:
+                        dt = now - st["since"]
+                        v = sess.viewer
+                        u, vd, j = painter.split
+                        log(f"mirror: {st['frames'] / dt:.1f} fps to {who} ({st.get('tweens', 0)} in-betweens per painted frame), "
+                            f"{st['bytes'] / dt / 1024:.0f} KB/s; painting {u:.0f} ms, decoding {vd:.0f} ms, JPEG {j:.0f} ms; "
+                            f"{sess.edition}, looking: {v.name + f' ({v.taste(sess.space).beats} reactions learned)' if v else 'nobody'}")
+                        st.update(frames=0, bytes=0, since=now)
+                    await asyncio.sleep(max(0.0, gap - (time.time() - t_send)))
 
         encoding = {"busy": False}
 
@@ -577,7 +644,7 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
 
         live = {"sess": sess, "who": who, "st": st, "jpeg": None}
         watched.append(live)
-        tasks = [asyncio.create_task(render_loop()), asyncio.create_task(control_loop())]
+        tasks = [asyncio.create_task(render_loop()), asyncio.create_task(send_loop()), asyncio.create_task(control_loop())]
         try:
             async for msg in ws:
                 if msg.type != WSMsgType.TEXT:
@@ -920,7 +987,9 @@ def main():
     ap.add_argument("--no-relay", action="store_true", help="don't post the new public link to the app's private ntfy.sh channel")
     ap.add_argument("--cpu", action="store_true", help="force CPU instead of the graphics card")
     ap.add_argument("--gpu", type=int, default=None, help="Windows: which graphics adapter to use (they're listed at startup)")
-    ap.add_argument("--max-fps", type=float, default=24, help="cap the stream's frame rate (default 24)")
+    ap.add_argument("--max-fps", type=float, default=30, help="cap the stream's frame rate (default 30)")
+    ap.add_argument("--tweens", type=int, default=None,
+                    help="Mirror: in-between frames decoded per painted frame (default: as many as keep ~1 painted frame a second)")
     ap.add_argument("--motion", type=float, default=1.0, help="how much the scene gently moves on its own, 0–1 (default 1)")
     ap.add_argument("--no-benchmark", action="store_true", help="skip the startup speed test")
     ap.add_argument("--qr", choices=["moodscape", "mirror"], default="moodscape", help="which app the phone QR code opens")
@@ -932,6 +1001,7 @@ def main():
         raise SystemExit(f"index.html not found in {APP_DIR}; keep this folder inside the moodscape repo")
     providers, gpu = pick_providers(a.cpu, a.gpu)
     painter = Painter(providers, a.motion, gpu)
+    painter.tweens = a.tweens
     bliss, unease = mirror_mod.Space(a.bliss, log, "bliss"), mirror_mod.Space(a.unease, log, "unease")
     bliss.attach_encoder(MODEL_DIR, download, providers=providers)   # same graphics card as the painter
     unease.attach_encoder(MODEL_DIR, download, share=bliss)   # one text encoder on the GPU for both editions

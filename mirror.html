@@ -489,19 +489,47 @@ function retry(why) {
 }
 function send(obj) { if (net.open) try { net.ws.send(JSON.stringify(obj)); } catch {} }
 
+/* Smooth playback. Frames arrive a few times a second (each one real: a painted frame or one of the laptop's
+   decoded in-betweens). The screen redraws at its own rate, 60 times a second, blending each new frame in over the
+   time until the next is due, so the painting flows continuously instead of stepping. */
+const play = { cur: null, at: 0, dur: 250, done: true, gap: 0, draws: 0, screenFps: 0, newFps: 0, arrivals: 0, total: 0, countAt: 0 };
+const snap = document.createElement("canvas"); snap.width = snap.height = 512;
+const sctx = snap.getContext("2d");
 async function onFrame(buf) {
   if (buf.byteLength < 16) return;
-  const [seq, ms] = new Uint32Array(buf, 0, 2);
+  const [seq, ms, gap] = new Uint32Array(buf, 0, 3);
   send({ ack: seq });
-  if (net.decoding) return;           // still drawing the last one: skip rather than fall behind
+  if (net.decoding) return;           // still decoding the last one: skip rather than fall behind
   net.decoding = true;
   try {
     const bmp = await createImageBitmap(new Blob([new Uint8Array(buf, 12)], { type: "image/jpeg" }));
-    pctx.drawImage(bmp, 0, 0, 512, 512); bmp.close?.();
+    const now = performance.now();
+    if (play.cur) { sctx.drawImage(paint, 0, 0); play.cur.close?.(); }   // blend on from exactly what's on screen
+    const since = play.at ? now - play.at : 250;
+    play.gap += ((since > 2000 ? 250 : since) - play.gap) * 0.3;          // how often frames really arrive
+    play.dur = clamp(Math.max(gap || 0, play.gap), 40, 1200);
+    play.cur = bmp; play.at = now; play.done = false; play.arrivals++; play.total++;
     if (!paint.classList.contains("on")) { paint.classList.add("on"); $("#mist").style.opacity = 0; }
-    net.frames++; net.lastFrame = performance.now(); net.gpuMs = ms;
+    net.frames++; net.lastFrame = now; net.gpuMs = ms;
   } catch {} finally { net.decoding = false; }
 }
+function drawLoop(now) {
+  if (play.cur && !play.done) {
+    const a = clamp((now - play.at) / play.dur);
+    pctx.globalAlpha = 1;
+    if (a < 1 && play.total > 1) { pctx.drawImage(snap, 0, 0); pctx.globalAlpha = a; }
+    pctx.drawImage(play.cur, 0, 0, 512, 512);
+    pctx.globalAlpha = 1;
+    play.done = a >= 1; play.draws++;
+  }
+  if (now - play.countAt >= 1000) {
+    const dt = (now - play.countAt) / 1000;
+    play.screenFps = Math.round(play.draws / dt); play.newFps = play.arrivals / dt;
+    play.draws = 0; play.arrivals = 0; play.countAt = now;
+  }
+  requestAnimationFrame(drawLoop);
+}
+requestAnimationFrame(drawLoop);
 
 let lastStatus = null, lastCaption = "", lastWhy = "";
 function onJson(text) {
@@ -658,7 +686,7 @@ function renderStatus(s) {
   if (s.why && s.why !== lastWhy) { lastWhy = s.why; logLine(s.why); }
   $("#learnOn").checked = s.learning;
   const live = performance.now() - net.lastFrame < 2000;
-  setState(live ? "live" : "", live ? `Live from ${net.host || "your laptop"} · ${s.fps.toFixed(0)} fps${s.hr ? ` · ♥ ${s.hr}` : ""}${s.judging ? " · watching your reaction" : ""}` : "Waiting for the first painting…");
+  setState(live ? "live" : "", live ? `Live from ${net.host || "your laptop"} · ${play.screenFps} fps on screen, ${s.fps.toFixed(1)} new a second${s.hr ? ` · ♥ ${s.hr}` : ""}${s.judging ? " · watching your reaction" : ""}` : "Waiting for the first painting…");
   if (!$("#people").hidden && who && who.pid !== peopleFor) { peopleFor = who.pid; send({ cmd: "people" }); }
   renderTest(s);
 }

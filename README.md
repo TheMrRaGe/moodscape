@@ -215,7 +215,10 @@ To rebuild after changing `mirror.html`, run `ANDROID_HOME=… bash android/buil
 
 **Notes:**
 - The public link changes every time the painter restarts. The app picks up the new one by itself, on the same Wi-Fi or through the relay.
-- Speed is whatever the laptop's GPU manages; under 6 fps it looks like a slow dissolve. Up to four frames are in flight at once, so the tunnel's round trip doesn't cap the frame rate.
+- **Speed:** each painted frame costs one UNet step. On a GTX 1650 Max-Q that's about 0.5 s, plus about 0.1 s for the decoder. Two things keep it from looking like a slideshow:
+  - **In-between frames on the laptop.** After painting a frame, the laptop decodes several real frames on the path from the previous painted frame to this one. It uses as many as still leave about one new painted frame a second (4–5 on that card), which roughly triples the frames streamed. Use `--tweens N` to fix the number; `0` turns them off.
+  - **Smooth playback on the phone.** The phone redraws at the screen's rate (60 fps) and blends each new frame in over the time until the next one is due. The status line shows both numbers: screen fps, and new frames a second.
+- Frames are sent spread evenly, up to 8 in flight, so the tunnel's round trip doesn't cap the frame rate.
 - `start-windows.bat` still works exactly as before for the mood app. Both apps share the one painter.
 
 ## Tuning
