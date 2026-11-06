@@ -67,6 +67,26 @@ button{font:inherit;color:inherit}
   text-shadow:0 0 30px rgba(255,140,170,.8);opacity:0;pointer-events:none;animation:burst 1.1s ease-out forwards}
 @keyframes burst{15%{opacity:1;transform:translate(-50%,-50%) scale(1.1)}100%{opacity:0;transform:translate(-50%,-90%) scale(1.3)}}
 .tells{font-size:.72rem;color:var(--ink-dim)}
+.eye{cursor:pointer}
+.mind{position:fixed;top:calc(64px + env(safe-area-inset-top,0px));left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));
+  max-height:calc(100dvh - 190px);overflow:auto;padding:12px;border-radius:14px;border:1px solid var(--line);background:rgba(6,7,11,.9);
+  display:grid;gap:10px;font-size:.76rem;font-variant-numeric:tabular-nums;z-index:3}
+@media (min-width:700px){.mind{left:auto;width:24rem}}
+.mind h3{margin:0;font:600 .66rem/1 var(--f-ui);text-transform:uppercase;letter-spacing:.14em;color:var(--gold)}
+.mind .row{display:flex;justify-content:space-between;gap:8px;align-items:center}
+.mind .muted{color:var(--ink-dim)}
+.mind .warn{color:#ffb3a8}
+.meter2{position:relative;height:10px;border-radius:5px;background:linear-gradient(90deg,rgba(255,138,122,.35),rgba(243,239,230,.08) 50%,rgba(217,182,107,.45))}
+.meter2 i{position:absolute;top:-3px;width:4px;height:16px;border-radius:2px;background:var(--ink);transform:translateX(-50%);transition:left .2s linear}
+.mind canvas{width:100%;height:44px;display:block}
+.drv{display:grid;grid-template-columns:8.5rem 1fr 3rem;gap:4px 8px;align-items:center}
+.drv .b{height:6px;border-radius:3px;background:rgba(243,239,230,.08);position:relative;overflow:hidden}
+.drv .b i{position:absolute;top:0;bottom:0;border-radius:3px}
+.lean{display:grid;grid-template-columns:5rem 1fr;gap:3px 8px}
+.lean span:nth-child(odd){color:var(--ink-dim);text-transform:capitalize}
+.verdict.kept{color:var(--gold)} .verdict.undone{color:#ffb3a8}
+.rate{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);display:flex;gap:10px;z-index:4}
+.rate .btn{min-width:7.5rem}
 .pair-video{width:100%;aspect-ratio:1;object-fit:cover;border-radius:12px;background:#000;border:1px solid var(--line)}
 .paste{display:flex;gap:8px}
 .paste input{flex:1;min-width:0;min-height:44px;border-radius:12px;border:1px solid var(--line);background:#0c0d12;color:var(--ink);padding:0 12px;font:500 .9rem var(--f-ui)}
@@ -170,7 +190,7 @@ pre.log{margin:0;font:400 .66rem/1.55 ui-monospace,"SF Mono",Menlo,Consolas,mono
       <div class="state" id="state"><span class="dot"></span><span class="txt" id="stateTxt">Not connected</span></div>
       <button class="chip" id="btnNext" type="button" disabled title="Show something else (counts as a no for this painting)">Skip</button>
       <button class="chip" id="btnKeep" type="button" disabled title="Keep this moment: a still, a living loop and its recipe">Keep</button>
-      <div class="eye" id="eye" aria-hidden="true"><video id="video" playsinline muted autoplay></video></div>
+      <div class="eye" id="eye" role="button" tabindex="0" aria-label="Show what the mirror is reading" title="Tap to see what it reads"><video id="video" playsinline muted autoplay></video></div>
     </div>
   </footer>
 </main>
@@ -183,12 +203,33 @@ pre.log{margin:0;font:400 .66rem/1.55 ui-monospace,"SF Mono",Menlo,Consolas,mono
   <label class="switch" for="learnOn"><input type="checkbox" id="learnOn" checked> Learn from reactions</label>
   <div class="sub">Each person gets their own taste in each edition. Every painting is built from a subject, a place, a detail, the time, weather, light, colours, a style and a framing. In Bliss the bars show what each face lights up at; in Unease, what makes it tense up. Longer means a bigger reaction; fainter means it isn't sure yet. Everything is stored only on your laptop.</div>
   <div id="peopleList" class="sub">Nobody yet.</div>
-  <div class="acts"><button class="chip" id="btnRepair" type="button">Change laptop</button></div>
+  <div class="acts"><button class="chip" id="btnRepair" type="button">Change laptop</button><button class="chip" id="btnTest2" type="button">Test how well it reads me</button><button class="chip" id="btnMind2" type="button">Show its mind</button></div>
   <div class="sub"><b>What it's deciding</b></div>
   <pre class="log" id="log"></pre>
 </section>
 
 <div class="toast" id="toast" hidden role="status"></div>
+
+<section class="mind" id="mind" hidden aria-label="What the mirror is reading">
+  <div class="row"><h3>Mind</h3><span class="muted" id="mWho"></span><button class="chip" id="btnMindClose" type="button">Close</button></div>
+  <div id="mFace" class="row"></div>
+  <div>
+    <div class="row"><span>Reaction now</span><span class="muted" id="mE"></span></div>
+    <div class="meter2"><i id="mNeedle" style="left:50%"></i></div>
+    <canvas id="mSpark" width="600" height="88" aria-hidden="true"></canvas>
+    <div class="row muted"><span id="mLeft">not into it</span><span id="mRight">lighting up</span></div>
+  </div>
+  <div><h3>What's driving it</h3><div class="drv" id="mDrivers"></div></div>
+  <div><h3>Trying</h3><div id="mTrying" class="muted"></div><div id="mVerdicts"></div></div>
+  <div><h3>Leaning toward</h3><div class="lean" id="mLean"></div></div>
+  <div><h3>Accuracy</h3><div id="mAcc" class="muted"></div>
+    <div class="acts" style="margin-top:6px"><button class="chip" id="btnTest" type="button">Test how well it reads me</button></div></div>
+</section>
+<div class="rate" id="rateBar" hidden>
+  <button class="btn" type="button" data-y="1">♥ Liked it</button>
+  <button class="btn ghost" type="button" data-y="0">Meh</button>
+  <button class="btn ghost" type="button" data-y="-1">✕ Not for me</button>
+</div>
 
 <div class="intro" id="pairCard" hidden>
   <div class="card" role="dialog" aria-labelledby="pairTitle">
@@ -417,6 +458,85 @@ function onJson(text) {
 }
 
 /* ---------- What the laptop says ---------- */
+/* ---------- Mind panel: what it reads right now, what's driving it, what it's trying, where it's leaning ---------- */
+const FEAT_NAMES = { smile: "smiling", cheek: "smile lines", wonder: "brows up / eyes wide", jaw: "open mouth", frown: "frowning",
+  browDown: "furrowed brows", sneer: "wrinkled nose", tension: "tight lips", squint: "wincing", lean: "leaning in", offscreen: "looking away",
+  stillness: "going still", blinkRate: "blinking", eyesClosed: "eyes closed", neutral: "neutral (AI)", happy: "happy (AI)", sad: "sad (AI)",
+  angry: "angry (AI)", fearful: "afraid (AI)", disgusted: "disgusted (AI)", surprised: "surprised (AI)", arousal: "pulse up" };
+const spark = [];
+function toggleMind(open = $("#mind").hidden) {
+  $("#mind").hidden = !open;
+  send({ cmd: "mind", on: open });
+  if (open && lastStatus) renderMind(lastStatus);
+}
+$("#eye").onclick = () => toggleMind();
+$("#btnMindClose").onclick = () => toggleMind(false);
+$("#btnMind2").onclick = () => { togglePeople(false); toggleMind(true); };
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function renderMind(s) {
+  const unease = s.edition === "unease";
+  $("#mWho").textContent = s.who ? `${s.who.name} · ${unease ? "Unease" : "Bliss"}` : (s.seeing === "identifying" ? "someone (identifying…)" : "nobody");
+  $("#mLeft").textContent = unease ? "unmoved" : "not into it"; $("#mRight").textContent = unease ? "unsettled" : "lighting up";
+  const d = diag.out || {}, f = $("#mFace"); f.replaceChildren();
+  const found = s.face_now;
+  f.append(el("span", found ? "" : "warn", found ? `● Face found (${Math.round((d.faceRate || 0) * 100)}% of reads, ${d.readsPerSec || 0}/s)` : "○ No face right now"),
+    el("span", d.light != null && d.light < 45 ? "warn" : "muted", d.light != null ? `light ${d.light}/255${d.light < 45 ? " · too dark" : ""}` : ""));
+  const e = s.e;
+  $("#mE").textContent = e == null ? "–" : `${e > 0 ? "+" : ""}${e.toFixed(2)}`;
+  $("#mNeedle").style.left = `${50 + Math.max(-48, Math.min(48, (e || 0) * 24))}%`;
+  spark.push(e == null ? null : e); if (spark.length > 120) spark.shift();
+  const c = $("#mSpark"), g = c.getContext("2d"); g.clearRect(0, 0, c.width, c.height);
+  g.strokeStyle = "rgba(243,239,230,.15)"; g.beginPath(); g.moveTo(0, c.height / 2); g.lineTo(c.width, c.height / 2); g.stroke();
+  g.strokeStyle = unease ? "#b9c2c9" : "#d9b66b"; g.lineWidth = 3; g.beginPath(); let pen = false;
+  spark.forEach((v, i) => { if (v == null) { pen = false; return; } const x = (i / 119) * c.width, y = c.height / 2 - Math.max(-2, Math.min(2, v)) * c.height / 4.4;
+    pen ? g.lineTo(x, y) : g.moveTo(x, y); pen = true; });
+  g.stroke();
+  const drv = $("#mDrivers"); drv.replaceChildren();
+  for (const x of s.drivers || []) {
+    const b = el("div", "b"), i = el("i"); const w = Math.min(50, Math.abs(x.c) * 40);
+    i.style.left = x.c >= 0 ? "50%" : `${50 - w}%`; i.style.width = `${w}%`; i.style.background = x.c >= 0 ? "var(--gold)" : "#ff8a7a";
+    b.appendChild(i);
+    drv.append(el("span", "", FEAT_NAMES[x.feat] || x.feat), b, el("span", "muted", `${x.c > 0 ? "+" : ""}${x.c.toFixed(2)}`));
+  }
+  if (!(s.drivers || []).length) drv.append(el("span", "muted", s.who ? "Calm face: nothing moving much." : "Waiting for a face."));
+  const tr = s.trying;
+  $("#mTrying").textContent = s.test ? `Testing: round ${s.test.round} of ${s.test.of} (${s.test.phase === "rate" ? "waiting for your rating" : "just look"})`
+    : tr ? `${tr.what}${tr.landed ? (tr.judge_in > 0 ? ` · judging your face for ${tr.judge_in.toFixed(1)} s` : " · deciding") : " · painting it"}` : "Holding this painting.";
+  const vd = $("#mVerdicts"); vd.replaceChildren();
+  for (const v of (s.verdicts || []).slice(-4).reverse())
+    vd.append(el("div", `verdict ${v.result}`, `${v.result === "kept" ? "✓ kept" : v.result === "undone" ? "↶ undid" : "· no change"} ${v.what} (${v.d > 0 ? "+" : ""}${v.d})`));
+  const ln = $("#mLean"); ln.replaceChildren();
+  for (const l of s.leaning || []) {
+    if (!l.top.length) continue;
+    ln.append(el("span", "", l.slot), el("span", "", l.top.map((t) => `${t.item}${t.sure > 0.15 ? "" : "?"}`).join(", ")));
+  }
+  if (!(s.leaning || []).length) ln.append(el("span", "muted", "–"), el("span", "muted", "Nobody to learn about yet."));
+  const a = s.accuracy;
+  const lastT = a?.tests?.length ? a.tests[a.tests.length - 1] : null;
+  $("#mAcc").textContent = !a ? "–" : [
+    a.taps ? `Your taps agreed with its reading ${a.agreed} of ${a.taps} times (${Math.round(100 * a.agreed / a.taps)}%).` : "No Love/Skip taps yet to check it against.",
+    lastT ? `Last test: reading your face ${lastT.face == null ? "n/a" : Math.round(lastT.face * 100) + "%"}, predicting your taste ${lastT.taste == null ? "n/a" : Math.round(lastT.taste * 100) + "%"} (50% = guessing).` : "",
+  ].filter(Boolean).join(" ");
+}
+
+/* ---------- Test me: it shows paintings, you say if you liked each, it compares with what it read ---------- */
+let shownResultAt = 0;
+function startTest() { togglePeople(false); send({ cmd: "test" }); toast("Test: look at each painting, then say if you liked it. 8 rounds.", 5000); }
+$("#btnTest").onclick = startTest; $("#btnTest2").onclick = startTest;
+for (const b of document.querySelectorAll("#rateBar .btn")) b.onclick = () => { send({ cmd: "rate", y: +b.dataset.y }); $("#rateBar").hidden = true; };
+function renderTest(s) {
+  const t = s.test;
+  $("#rateBar").hidden = !(t && t.phase === "rate");
+  if (t) $("#whoSub").textContent = `Test ${t.round} of ${t.of}: ${t.phase === "rate" ? "did you like that one?" : "just look at it"}`;
+  const r = s.test_result;
+  if (r && r.at !== shownResultAt) {
+    shownResultAt = r.at;
+    const pct = (x) => (x == null ? "n/a" : `${Math.round(x * 100)}%`);
+    toast(`Test done. Reading your face: ${pct(r.face)}. Predicting your taste: ${pct(r.taste)}. (50% = guessing, 100% = always right; ${r.liked} liked, ${r.disliked} not.)`, 12000);
+    logLine(`test: face ${pct(r.face)}, taste ${pct(r.taste)} over ${r.n} paintings`);
+  }
+}
+
 let toastTimer = 0;
 function toast(text, ms = 4000) {
   const t = $("#toast"); t.textContent = text; t.hidden = false;
@@ -437,6 +557,7 @@ $("#btnKeep").onclick = () => send({ cmd: "keep" });
 
 function renderStatus(s) {
   lastStatus = s;
+  if (!$("#mind").hidden) renderMind(s);
   const who = s.who;
   if (s.seeing === "person") {
     $("#whoName").textContent = who.name;
@@ -468,6 +589,7 @@ function renderStatus(s) {
   const live = performance.now() - net.lastFrame < 2000;
   setState(live ? "live" : "", live ? `Live from ${net.host || "your laptop"} · ${s.fps.toFixed(0)} fps${s.hr ? ` · ♥ ${s.hr}` : ""}${s.judging ? " · watching your reaction" : ""}` : "Waiting for the first painting…");
   if (!$("#people").hidden && who && who.pid !== peopleFor) { peopleFor = who.pid; send({ cmd: "people" }); }
+  renderTest(s);
 }
 function setState(kind, text) { const el = $("#state"); el.className = `state ${kind}`; $("#stateTxt").textContent = text; }
 
@@ -564,7 +686,7 @@ $("#mirror").addEventListener("pointerup", (e) => {   // double-tap the mirror: 
 /* ---------- Camera, expression and identity ---------- */
 const video = $("#video");
 const cam = { on: false, faceIdOn: false, recog: false, landmarker: null, faceapi: null, lastDetect: 0, lastVideoTime: -1, faceAt: 0,
-  idBusy: false, idAt: 0, emoAt: 0, prevNose: null, prevT: 0, motion: 0, blinks: [], blinkOpen: true, startAt: 0 };
+  idBusy: false, idAt: 0, emoAt: 0, faMs: 0, delegate: "", prevNose: null, prevT: 0, motion: 0, blinks: [], blinkOpen: true, startAt: 0 };
 
 async function start() {
   $("#btnStart").disabled = true;
@@ -588,7 +710,7 @@ async function start() {
     const files = await vision.FilesetResolver.forVisionTasks(`${CFG.vision}/wasm`);
     const make = (delegate) => vision.FaceLandmarker.createFromOptions(files, {
       baseOptions: { modelAssetPath: CFG.faceModel, delegate }, outputFaceBlendshapes: true, runningMode: "VIDEO", numFaces: 1 });
-    try { cam.landmarker = await make("GPU"); } catch { cam.landmarker = await make("CPU"); logLine("face tracking on CPU (GPU wasn't available)"); }
+    try { cam.landmarker = await make("GPU"); cam.delegate = "GPU"; } catch { cam.landmarker = await make("CPU"); cam.delegate = "CPU"; logLine("face tracking on CPU (GPU wasn't available)"); }
     logLine("expression tracking ready");
   } catch (e) {
     setState("err", "Couldn't load face tracking. Check the phone's connection and reload."); logLine(`face tracking failed: ${e.message || e}`); return;
@@ -617,33 +739,73 @@ async function loadFaceApi(recognition) {
     if (recognition) setState("err", "Face recognition didn't load, so it can't tell people apart. Reload to try again.");
   }
 }
-async function emotions(now) {
+/* One face-api job at a time. Recognition (if agreed to) goes first when it's due, and that pass reads the emotions
+   too; otherwise the emotion model runs about 4 times a second, or less often on a slow phone, so it can never
+   crowd recognition out. */
+async function faceApiTick(now) {
   const fa = cam.faceapi;
-  if (!fa || cam.idBusy || now - cam.faceAt > 300 || now - cam.emoAt < CFG.emotionEveryMs) return;
-  cam.idBusy = true; cam.emoAt = now;
-  try {
-    const r = await fa.detectSingleFace(video, new fa.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 })).withFaceExpressions();
-    if (r && r.expressions) send({ x: EMOTIONS.map((k) => +(r.expressions[k] || 0).toFixed(3)) });
-  } catch {} finally { cam.idBusy = false; }
-}
-async function identify(now) {
-  const fa = cam.faceapi;
-  if (!fa || !cam.recog || cam.idBusy || now - cam.faceAt > 300) return;
+  if (!fa || cam.idBusy || now - cam.faceAt > 300) return;
   const settled = lastStatus?.seeing === "person";
-  if (now - cam.idAt < (settled ? CFG.idSettledMs : CFG.idEveryMs)) return;
-  cam.idBusy = true; cam.idAt = now;
+  const idDue = cam.recog && now - cam.idAt >= (settled ? CFG.idSettledMs : CFG.idEveryMs);
+  const emoDue = now - cam.emoAt >= Math.max(CFG.emotionEveryMs, 2 * cam.faMs);
+  if (!idDue && !emoDue) return;
+  cam.idBusy = true; cam.emoAt = now;
+  const t0 = performance.now();
   try {
-    const r = await fa.detectSingleFace(video, new fa.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 })).withFaceLandmarks(true).withFaceDescriptor();
-    if (r && r.detection.score > 0.6 && r.detection.box.width > 70) send({ id: Array.from(r.descriptor, (v) => +v.toFixed(4)) });
-  } catch (e) { logLine(`face read failed: ${e.message || e}`); }
-  finally { cam.idBusy = false; }
+    if (idDue) {
+      cam.idAt = now;
+      const r = await fa.detectSingleFace(video, new fa.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.4 }))
+        .withFaceLandmarks(true).withFaceExpressions().withFaceDescriptor();
+      diag.faRuns++;
+      if (!r) { diag.faMissed++; diag.idNote = "face-api didn't find the face"; }
+      else {
+        if (r.expressions) send({ x: EMOTIONS.map((k) => +(r.expressions[k] || 0).toFixed(3)) });
+        if (r.detection.score > 0.5 && r.detection.box.width > 60) { send({ id: Array.from(r.descriptor, (v) => +v.toFixed(4)) }); diag.idSent++; diag.idNote = ""; }
+        else diag.idNote = `face too small or unclear (score ${r.detection.score.toFixed(2)}, ${Math.round(r.detection.box.width)} px wide)`;
+      }
+    } else {
+      const r = await fa.detectSingleFace(video, new fa.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.4 })).withFaceExpressions();
+      diag.faRuns++;
+      if (r && r.expressions) send({ x: EMOTIONS.map((k) => +(r.expressions[k] || 0).toFixed(3)) }); else diag.faMissed++;
+    }
+  } catch (e) { diag.error = `face-api: ${e.message || e}`; logLine(diag.error); }
+  finally { cam.faMs = cam.faMs * 0.7 + (performance.now() - t0) * 0.3; cam.idBusy = false; }
+}
+
+/* Diagnostics: what the phone is actually seeing, sent to the laptop every 2 s (and shown in the Mind panel), so
+   "it isn't detecting me" has an answer: too dark, too far, a model that didn't load, or a slow phone. */
+const diag = { reads: 0, faces: 0, faRuns: 0, faMissed: 0, idSent: 0, idNote: "", error: "", light: null, lastSend: 0 };
+function diagTick(now) {
+  if (now - diag.lastSend < 2000) return;
+  const dt = (now - diag.lastSend) / 1000; diag.lastSend = now;
+  try {   // light level: mean brightness of the middle of the camera image, 0-255
+    pctx2.drawImage(video, 0, 0, 160, 120);
+    const d = pctx2.getImageData(40, 20, 80, 80).data; let y = 0;
+    for (let i = 0; i < d.length; i += 4) y += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    diag.light = Math.round(y / (d.length / 4));
+  } catch {}
+  const out = { faceRate: diag.reads ? +(diag.faces / diag.reads).toFixed(2) : 0, readsPerSec: +(diag.reads / dt).toFixed(1), light: diag.light,
+    tracker: cam.landmarker ? cam.delegate : "not loaded", emotionModel: !!cam.faceapi, recognition: cam.recog, faMs: Math.round(cam.faMs),
+    faMissRate: diag.faRuns ? +(diag.faMissed / diag.faRuns).toFixed(2) : null, idSent: diag.idSent, idNote: diag.idNote || null,
+    video: video.videoWidth ? `${video.videoWidth}x${video.videoHeight}` : "none", error: diag.error || null,
+    app: location.hostname === "appassets.androidplatform.net" ? "android app" : "browser" };
+  diag.reads = diag.faces = diag.faRuns = diag.faMissed = 0;
+  diag.out = out;
+  send({ diag: out });
+  if (cam.on && out.faceRate < 0.2 && out.readsPerSec > 0) {
+    const why = out.light !== null && out.light < 45 ? "It's too dark for the camera; turn on a light or face a window."
+      : "Make sure your whole face is in the front camera's view, about an arm's length away.";
+    setState("err", `Can't see your face. ${why}`);
+  }
 }
 
 function avg(c, a, b) { return ((c[a] || 0) + (c[b] || 0)) / 2; }
 function readFace(now) {
   if (!cam.landmarker || video.readyState < 2 || now - cam.lastDetect < CFG.detectEveryMs || video.currentTime === cam.lastVideoTime) return;
   cam.lastDetect = now; cam.lastVideoTime = video.currentTime;
-  let res; try { res = cam.landmarker.detectForVideo(video, now); } catch { return; }
+  let res; try { res = cam.landmarker.detectForVideo(video, now); } catch (e) { diag.error = `tracker: ${e.message || e}`; return; }
+  diag.reads++;
+  if (res?.faceBlendshapes?.[0]) diag.faces++;
   const shapes = res?.faceBlendshapes?.[0]?.categories, lm = res?.faceLandmarks?.[0];
   if (!shapes || !lm) { send({ s: null }); $("#eye").classList.remove("seen"); if (now - cam.faceAt > 1000) pulse.buf = []; return; }
   cam.faceAt = now; $("#eye").classList.add("seen");
@@ -682,8 +844,7 @@ function readFace(now) {
   s.push(gazeH, gazeV, cam.motion, cam.blinks.length * 60 / span);
   send({ s: s.map((v) => +v.toFixed(3)) });
   pulseSample(lm, now);
-  emotions(now);
-  identify(now);
+  faceApiTick(now);
 }
 
 /* Heart rate from the camera (remote photoplethysmography): each heartbeat changes the skin's colour very slightly.
@@ -779,7 +940,7 @@ function posHeartRate(buf) {
 }
 /* rppg-end */
 
-function loop(now) { readFace(now); requestAnimationFrame(loop); }
+function loop(now) { readFace(now); if (cam.on) diagTick(now); requestAnimationFrame(loop); }
 
 let wakeLock = null;
 async function keepAwake() { try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {} }

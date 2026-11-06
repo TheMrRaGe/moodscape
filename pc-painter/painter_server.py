@@ -337,6 +337,21 @@ async def cors(request, handler):
     return resp
 
 
+_phone_written = [0.0]
+
+
+def write_phone_status(who, diag):
+    """status/phone.json: what the phone last reported, so the agent's user can see why it might not find a face."""
+    if time.time() - _phone_written[0] < 3:
+        return
+    _phone_written[0] = time.time()
+    try:
+        d = HERE / "status"; d.mkdir(exist_ok=True)
+        (d / "phone.json").write_text(json.dumps({"phone": who, "time": time.strftime("%Y-%m-%d %H:%M:%S"), **diag}, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def save_keepsake(info, still, frames):
     """captures/<edition>-<date>-<time>-<place>/: still.png, loop.webp (seamless, 12 fps) and metadata.json in the
     common NFT metadata shape (name, description, image, animation_url, attributes). The recipe (prompt + layout
@@ -373,6 +388,7 @@ def phone_name(request):
 
 
 def make_app(painter, gpu_pool, max_fps, profiles=None):
+    watched = []   # live mirror sessions, for the dashboard
     async def health(request):
         return web.json_response({"ok": True, "painter": "pc", "stream": True, "mirror": profiles is not None,
                                   "provider": painter.provider, "gpu": painter.gpu,
@@ -483,6 +499,7 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                     st["fps"] += (1 / max(1e-3, now - st["last"]) - st["fps"]) * 0.1
                 st["last"] = now
                 st["seq"] += 1; st["inflight"] += 1; st["frames"] += 1; st["bytes"] += len(jpeg)
+                live["jpeg"] = jpeg
                 await ws.send_bytes(struct.pack("<III", st["seq"], int(ms), 0) + jpeg)
                 if now - st["since"] >= 15:
                     dt = now - st["since"]
@@ -521,7 +538,8 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                     sess.tick(now)
                     if now - last_status >= 0.25:
                         last_status = now
-                        out = sess.status(now); out["fps"] = round(st["fps"], 1)
+                        out = sess.telemetry(now) if st.get("mind") else sess.status(now)
+                        out["fps"] = round(st["fps"], 1)
                         await send_json({"status": out})
                     profiles.save_if_due()
                 except Exception as e:
@@ -553,6 +571,8 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
             finally:
                 keeping["busy"] = False
 
+        live = {"sess": sess, "who": who, "st": st, "jpeg": None}
+        watched.append(live)
         tasks = [asyncio.create_task(render_loop()), asyncio.create_task(control_loop())]
         try:
             async for msg in ws:
@@ -570,10 +590,15 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                         sess.on_identity(d["id"], clock())
                     if "x" in d:
                         sess.on_emotions(d["x"], clock())
+                    if "diag" in d:
+                        sess.on_diag(d["diag"], clock())
+                        write_phone_status(who, sess.phone)
                     if "hr" in d:
                         sess.on_heart(d["hr"], clock())
                     if d.get("cmd") == "keep":
                         asyncio.create_task(keep())
+                    elif d.get("cmd") == "mind":   # the phone's Mind panel is open: send the live view with each status
+                        st["mind"] = bool(d.get("on"))
                     elif "cmd" in d:
                         if d["cmd"] != "people":
                             sess.command(d, clock())
@@ -581,12 +606,45 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
                 except Exception as e:
                     log(f"mirror: ignored a bad message from {who} ({e!r})")
         finally:
+            if live in watched:
+                watched.remove(live)
             for t in tasks:
                 t.cancel()
             if sess.viewer is not None:
                 sess.viewer.last_seen = time.time()
             profiles.save(force=True)
             log(f"mirror: {who} disconnected; profiles saved")
+        return ws
+
+    async def watch(request):
+        """The dashboard: a live view of every phone looking into the mirror (what it reads, where it's leaning,
+        how accurate it's been), plus the painting about once a second. Read-only."""
+        if not origin_ok(request):
+            return web.Response(status=403, text="origin not allowed")
+        ws = web.WebSocketResponse(heartbeat=20)
+        await ws.prepare(request)
+        log("dashboard: a viewer connected")
+        last_frame = 0.0
+        try:
+            while not ws.closed:
+                now = time.monotonic()
+                sessions = []
+                for i, lv in enumerate(list(watched)):
+                    tel = lv["sess"].telemetry(now)
+                    tel.update(phone_name=lv["who"], fps=round(lv["st"]["fps"], 1), index=i)
+                    sessions.append(tel)
+                await ws.send_str(json.dumps({"sessions": sessions, "gpu": painter.gpu, "encode_ms": round(painter.spaces["bliss"].encode_ms),
+                                              "split": [round(x) for x in painter.split]}, default=float))
+                if time.time() - last_frame > 1.0:
+                    last_frame = time.time()
+                    for i, lv in enumerate(list(watched)):
+                        if lv["jpeg"]:
+                            await ws.send_bytes(struct.pack("<I", i) + lv["jpeg"])
+                await asyncio.sleep(0.25)
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        finally:
+            log("dashboard: viewer left")
         return ws
 
     async def capture_file(request):
@@ -622,6 +680,7 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
     if profiles is not None:
         app.router.add_get("/api/mirror", mirror_stream)
         app.router.add_get("/api/capture/{name}/{file}", capture_file)
+        app.router.add_get("/api/watch", watch)
         async def save_profiles(_app):
             profiles.save(force=True)
         app.on_shutdown.append(save_profiles)
@@ -679,6 +738,7 @@ def write_link_status(url, target, which):
     try:
         d = HERE / "status"; d.mkdir(exist_ok=True)
         (d / "link.json").write_text(json.dumps({"url": url, "open": target, "app": which, "mirror": f"{url}/mirror.html",
+                                                 "dashboard": f"{url}/dashboard.html",
                                                  "apk": f"{url}/mirror.apk" if APK.is_file() else None,
                                                  "time": time.strftime("%Y-%m-%d %H:%M:%S")}, indent=2), encoding="utf-8")
         import qrcode
@@ -707,6 +767,7 @@ def show_link(url, which="moodscape"):
         print("  In the Moodscape Mirror Android app: tap 'Scan the QR code' and point it here.", flush=True)
         if APK.is_file():
             print(f"  Get the app on the phone: {url}/mirror.apk", flush=True)
+        print(f"  Watch its mind live (on this PC or any browser): {url}/dashboard.html", flush=True)
         print("  The Mirror is served by this PC, so the link changes each time you restart", flush=True)
         print("  this script; scan the new code then. People it has learned stay on this PC.", flush=True)
         print(f"  Moodscape (mood app) link:  {pair}", flush=True)
@@ -747,6 +808,7 @@ def main():
     gpu_pool = ThreadPoolExecutor(max_workers=1)  # one GPU, one frame at a time
     log(f"server: app, live stream and painter on http://localhost:{a.port}/ (stream capped at {a.max_fps:g} fps)")
     log(f"server: Mirror on http://localhost:{a.port}/mirror.html (works with this PC's own webcam too)")
+    log(f"server: live dashboard (what it reads, where it's leaning, accuracy) on http://localhost:{a.port}/dashboard.html")
     tunnel = None if a.no_tunnel else start_tunnel(a.port, a.qr)
     try:
         web.run_app(make_app(painter, gpu_pool, a.max_fps, profiles), host="0.0.0.0", port=a.port, print=None)

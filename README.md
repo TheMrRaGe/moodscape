@@ -137,6 +137,32 @@ Each edition starts from sensible defaults (in Bliss, a smile means yes; in Unea
 
 In `python pc-painter/test_face_calibration.py`, a simulated person raises their eyebrows when they like something and smirks when they don't. The defaults read that backwards, and the mirror drifted to −0.54 (worse than random). With occasional taps it learned "eyebrows up = yes" and climbed to +0.46. `node tools/test_heart_rate.js` checks the pulse reader on synthetic skin colour.
 
+**See its mind, live:**
+- **On the phone:** tap the little camera circle at the bottom right to open the **Mind** panel. It shows:
+  - whether it can see your face, and the light level,
+  - your reaction right now, with the last few seconds as a line,
+  - which signals are driving it (e.g. "smiling +0.4, looking away −0.5"),
+  - what it's trying, and whether it kept or undid the last changes,
+  - what it's leaning toward in each section,
+  - how accurate it has been.
+- **On the laptop (or any browser):** open **`<painter link>/dashboard.html`**; the painter prints the address. It's the full version, for watching while someone else looks into the mirror: the live painting, a 90-second reaction chart marked with every kept or undone change, every signal's contribution, the seven emotions, pulse and its quality, the phone's own diagnostics, leaning per section, this person's learned weights, accuracy and the decision log.
+
+**How accurate is it?** Two measures:
+- **Tap agreement:** every Love/Skip/Keep is first scored against what the reading said just before (then it learns from it). The Mind panel and dashboard show "agreed N of M".
+- **Test how well it reads me** (Mind panel or People): it shows 8 paintings, a mix of what it thinks you'll love, what it thinks you won't, and some at random. You just look at each for a few seconds, then tap ♥ Liked it / Meh / ✕ Not for me. It then reports two scores, where 50% is guessing and 100% is always right:
+  - **Reading your face:** how often your face reaction ranked a painting you liked above one you didn't.
+  - **Predicting your taste:** the same for its learned taste.
+
+  If you liked all or none, it falls back to how often the face reading pointed the same way as your answer. The ratings also teach it, so later tests should score higher. With 8 paintings the score is rough; run a few.
+
+**Not detecting you?** Open the Mind panel. The phone checks what it sees every 2 seconds and says why:
+- **Too dark:** light under 45/255.
+- **Face not in view.**
+- **A model that didn't load.**
+- **Recognition reads too small or unclear.**
+
+It also sends this to the laptop, which logs it and saves it in `pc-painter/status/phone.json`. Face recognition and the emotion model take turns on the phone: recognition goes first when due, and one pass reads both, so a slow phone can't starve it.
+
 **Let Claude run it (the Mirror agent):** double-click **`pc-painter/mirror-agent.bat`** instead of `mirror-windows.bat`. It starts the painter and keeps it running, and lets anything with access to the folder (such as Claude in the desktop app) start, stop or restart it by writing one line to `pc-painter/control/command.txt`. The accepted commands are `start`, `stop`, `restart` and `status`, plus a few safe painter options such as `--gpu 1` or `--max-fps 15`; anything else is refused. It also lets Claude pick up the QR code and read the log:
 - The painter's output goes to `pc-painter/status/painter.log`.
 - When its link is up, the painter saves `status/qr.png` and `status/link.json`.

@@ -8,3 +8,5 @@ pc-painter/profiles.tmp
 pc-painter/captures/
 pc-painter/status/
 pc-painter/control/
+__pycache__/
+*.pyc

@@ -96,6 +96,7 @@ CALIB_SD = 0.3           # how far a person's learned weights may stray from the
 CALIB_NOISE = 0.7        # how noisy one Love/Skip label is
 LABEL_FROM_S, LABEL_TO_S = 2.5, 0.3   # a tap is explained by the face over this window before it
 AWAY = -1.0              # the face leaving the frame: in either edition, the mirror lost them
+TEST_N, TEST_SHOW_S, TEST_RATE_S = 8, 4.5, 25.0   # "Test me": paintings per test, how long each is shown, how long to wait for a rating
 HR_MIN_Q = 0.4           # camera heart-rate readings below this quality are ignored (in tests, wrong or pulse-less readings stay under ~0.37)
 TURN_YAW, TURN_PITCH, GAZE_OFF = 0.3, 0.35, 0.4   # head turned / tilted, or eyes pointed, this far from rest = looking elsewhere
 CAPTION_SLOTS = ("subject", "place", "detail", "time", "weather", "style")
@@ -324,6 +325,8 @@ class Taste:
         self.space, K = space, space.K
         self.beats, self.seeds, self.moments = 0, {}, []
         self.labels = 0                                     # Love / Skip / Keep taps learned from
+        self.tap_hits = self.tap_n = 0                      # how often the face reading agreed with a tap, scored before learning from it
+        self.tests = []                                     # "Test me" results, newest last
         w0 = np.array([EDITIONS.get(space.edition, EDITIONS["bliss"])["w"].get(f, 0.0) for f in FEATS])
         self.cP0 = np.eye(len(FEATS)) / CALIB_SD ** 2
         self.cA, self.cb, self.w0 = self.cP0.copy(), self.cP0 @ w0, w0
@@ -347,6 +350,9 @@ class Taste:
                 cA, cb = np.array(cal["A"]), np.array(cal["b"])
                 self.cA[np.ix_(jn, jn)], self.cb[jn] = cA[np.ix_(jo, jo)], cb[jo]
             self.labels = int(cal.get("labels", 0))
+        acc = d.get("accuracy") or {}
+        self.tap_hits, self.tap_n = int(acc.get("tap_hits", 0)), int(acc.get("tap_n", 0))
+        self.tests = list(acc.get("tests", []))[-20:]
         self.seeds = {int(k): v for k, v in d.get("seeds", {}).items()}
         self.moments = [m for m in d.get("moments", []) if isinstance(m, dict) and "choice" in m]
         old = d.get("keys") or []
@@ -369,6 +375,7 @@ class Taste:
         return {"beats": self.beats, "yscale": round(self.yscale, 4), "seeds": {str(k): v for k, v in self.seeds.items()},
                 "moments": self.moments, "keys": self.space.keys,
                 "calib": {"feats": FEATS, "labels": self.labels, "A": np.round(self.cA, 4).tolist(), "b": np.round(self.cb, 4).tolist()},
+                "accuracy": {"tap_hits": self.tap_hits, "tap_n": self.tap_n, "tests": self.tests[-20:]},
                 "A_b64": base64.b64encode(self.A[np.triu_indices(len(self.b))].astype(np.float32).tobytes()).decode(),
                 "b": np.round(self.b, 5).tolist(), "seen": np.round(self.seen, 2).tolist()}
 
@@ -403,6 +410,18 @@ class Taste:
         self.cb = self.cb + f * y / CALIB_NOISE ** 2
         self.labels += 1
         self._w = None
+
+    def leaning(self, per=2):
+        """Per section, the options it currently believes this person reacts to most, with how sure it is."""
+        mu, sd, sp = self.mean(), 1 / np.sqrt(np.diag(self.A)), self.space
+        out = []
+        for j, slot in enumerate(sp.slots):
+            o, n = sp.offsets[j], sp.sizes[j]
+            order = np.argsort(-mu[o:o + n])
+            out.append({"slot": slot, "top": [{"item": sp.labels[j][i], "score": round(float(mu[o + i]), 3),
+                                               "sure": round(float(1 - sd[o + i] / PRIOR_SD), 2)} for i in order[:per]],
+                        "bottom": sp.labels[j][int(order[-1])]})
+        return out
 
     def tells(self, k=3):
         """The face signals that, for this person, have moved furthest from the defaults."""
@@ -607,6 +626,10 @@ class MirrorSession:
         self.emo = None                    # (t, latest emotion probabilities) from the phone's emotion model
         self.hr = None                     # (t, beats per minute, signal quality) read from skin colour
         self.feats = deque()               # (t, feature vector) for explaining Love / Skip taps
+        self.verdicts = deque(maxlen=12)   # recent changes and how the face judged them
+        self.phone = {}                    # the phone's own diagnostics: is it finding a face, how bright, which models loaded
+        self.test = None                   # a "Test me" run in progress
+        self.test_result = None
         self.rng = np.random.default_rng(seed)
         self.viewer = None
         self.face_at = -1e9
@@ -756,6 +779,24 @@ class MirrorSession:
             f["arousal"] = z("hr", self.hr[1]) * min(1.0, (self.hr[2] - 0.35) / 0.25)
         return np.array([f[k] for k in FEATS])
 
+    def on_diag(self, d, now):
+        """The phone's own report: is it finding a face, how bright is it, which models loaded, what went wrong."""
+        if not isinstance(d, dict):
+            return
+        clean = {k: v for k, v in list(d.items())[:24] if isinstance(k, str) and len(k) < 32 and (
+                 isinstance(v, (int, float, bool)) or (isinstance(v, str) and len(v) < 300) or v is None)}
+        old, self.phone = self.phone, {**clean, "at": round(now, 1)}
+        # say so in the log when it stops (or starts) finding a face, and why it might be
+        if old.get("faceRate", 1) > 0.2 >= clean.get("faceRate", 1) or (not old and clean.get("faceRate", 1) <= 0.2):
+            light = clean.get("light")
+            why = (f"; it's dark (light {light}/255)" if isinstance(light, (int, float)) and light < 45 else
+                   f"; light is {light}/255" if light is not None else "")
+            self.log(f"mirror[{self.who}]: the phone isn't finding a face ({clean.get('faceRate')} of reads){why}")
+        elif old.get("faceRate", 0) <= 0.2 < clean.get("faceRate", 0):
+            self.log(f"mirror[{self.who}]: the phone is finding a face again ({clean.get('faceRate')} of reads)")
+        if clean.get("error") and clean.get("error") != old.get("error"):
+            self.log(f"mirror[{self.who}]: the phone reports: {clean['error']}")
+
     def on_emotions(self, probs, now):
         """The phone's emotion model: probabilities for EMOTIONS, a few times a second."""
         if not isinstance(probs, list) or len(probs) != len(EMOTIONS) or not all(isinstance(x, (int, float)) and math.isfinite(x) for x in probs):
@@ -784,6 +825,8 @@ class MirrorSession:
             return
         fs = [f for ts, f in self.feats if now - LABEL_FROM_S <= ts <= now - LABEL_TO_S]
         if len(fs) >= 4:
+            pred = float(t.weights() @ np.mean(fs, axis=0))     # what the reading said, before it learns from this tap
+            t.tap_n += 1; t.tap_hits += (pred > 0) == (y > 0)
             t.learn_label(np.mean(fs, axis=0), y)
             self.profiles.dirty = True
             tells = ", ".join(f"{d['feat']} {d['w']:+.2f}" for d in t.tells(3))
@@ -876,6 +919,14 @@ class MirrorSession:
             self.label(-1.0, now, "Skip")
             self.change = None
             self.jump(now, "you asked for something else (counts as a no for this painting)")
+        elif c == "test":
+            if d.get("state") == "stop":
+                if self.test is not None:
+                    self.test = None; self.event("test stopped"); self.next_step = now + 1.0
+            else:
+                self.start_test(now)
+        elif c == "rate":
+            self.rate(d.get("y"), now)
         elif c == "love":
             t = self.taste()
             if t is not None and self.learning and self.dst is not None and self.dst[0] is not None:
@@ -922,7 +973,9 @@ class MirrorSession:
         if now >= self.next_beat:
             self.next_beat = now + BEAT_S
             self.beat(now)
-        if self.pending is None and self.dst is not None and self.dst[0] is not None:
+        if self.test is not None:
+            self.test_tick(now)
+        elif self.pending is None and self.dst is not None and self.dst[0] is not None:
             if self.viewer is None:
                 if now >= self.next_step:
                     self.room_step(now)
@@ -974,6 +1027,8 @@ class MirrorSession:
             if self.learning and ch.get("dx") is not None and np.any(ch["dx"]):
                 t.learn_pair(ch["dx"], after - ch["before"])
                 self.profiles.dirty = True
+            self.verdicts.append({"t": round(now, 1), "what": ch["what"], "d": round(float(d), 2),
+                                  "result": "undone" if ch["kind"] == "step" and d < UNDO else "kept" if d > KEEP else "neutral"})
             if ch["kind"] == "step" and d < UNDO:
                 self.misses += 1
                 self.request(ch["prev"], ch["prev_seed"], "revert", f"{v.name} {'cooled on' if self.edition == 'bliss' else 'relaxed at'} {ch['what']} ({d:+.1f}); undoing it")
@@ -1093,6 +1148,124 @@ class MirrorSession:
         self.request(new, seed, "room", f"drifting: {sp.slots[j]} -> {sp.labels[j][new[j]]}")
         self.next_step = now + 8.0
 
+    # ---------- "Test me": how well does the reading match what the person says?
+    def start_test(self, now):
+        t = self.taste()
+        if t is None or self.viewer.base is None:
+            self.event("can't test yet: nobody is in front of the mirror (or it's still learning their resting face)")
+            return
+        sp, mu = self.space, t.mean()
+        picks = []
+        for i in range(TEST_N):   # what it thinks they'll like most, least, and some at random, in random order
+            if i % 4 == 3:
+                picks.append(sp.random(self.rng)); continue
+            a = mu + self.rng.normal(0, 0.12, sp.K)
+            if i % 2:
+                a = -a
+            picks.append(tuple(self.thompson_slot(a, j) for j in range(len(sp.slots))))
+        order = self.rng.permutation(TEST_N)
+        self.test = {"picks": [picks[i] for i in order], "i": -1, "phase": "load", "t0": now, "rounds": []}
+        self.change, self.pending = None, None
+        self.event(f"test: {TEST_N} paintings for {self.viewer.name}; look at each, then say if you liked it")
+        self.next_round(now)
+
+    def next_round(self, now):
+        T = self.test
+        T["i"] += 1
+        if T["i"] >= len(T["picks"]):
+            return self.finish_test(now)
+        T["phase"], T["t0"] = "load", now
+        self.request(T["picks"][T["i"]], int(self.rng.integers(1, 2 ** 31)), "test", f"test round {T['i'] + 1} of {len(T['picks'])}")
+
+    def test_tick(self, now):
+        T = self.test
+        if T["phase"] == "load" and self.pending is None and self.dst is not None and self.dst[0] == T["picks"][T["i"]]:
+            T["phase"], T["shown_at"] = "show", self.m_t0
+        elif T["phase"] == "show" and now >= T["shown_at"] + MORPH_S + TEST_SHOW_S:
+            a, b = T["shown_at"] + MORPH_S + 0.6, T["shown_at"] + MORPH_S + TEST_SHOW_S
+            fs = [f for ts, f in self.feats if a <= ts <= b]
+            T["cur"] = {"face": self.level(a, b), "feat": np.mean(fs, axis=0) if fs else None,
+                        "taste": float(self.space.features(T["picks"][T["i"]]) @ self.taste().mean())}
+            T["phase"], T["t0"] = "rate", now
+        elif T["phase"] == "rate" and now - T["t0"] > TEST_RATE_S:
+            self.event("test: no rating, skipping that one")
+            self.next_round(now)
+
+    def rate(self, y, now):
+        T = self.test
+        if T is None or T["phase"] != "rate" or y not in (1, -1, 0):
+            return
+        cur, t = T["cur"], self.taste()
+        T["rounds"].append({"y": y, "face": None if cur["face"] is None else round(cur["face"], 3), "taste": round(cur["taste"], 3)})
+        if y and self.learning:   # the rating teaches it too: the face weights and the taste
+            if cur["feat"] is not None:
+                t.learn_label(cur["feat"], float(y))
+            t.learn(self.space.features(T["picks"][T["i"]]), 2 * y * max(0.04, t.yscale))
+            self.profiles.dirty = True
+        self.next_round(now)
+
+    @staticmethod
+    def auc(pairs):
+        """How often a liked painting scored higher than a disliked one (0.5 = guessing, 1 = always right)."""
+        pos = [s for s, y in pairs if y > 0 and s is not None]
+        neg = [s for s, y in pairs if y < 0 and s is not None]
+        if not pos or not neg:
+            return None
+        wins = sum((p > n) + 0.5 * (p == n) for p in pos for n in neg)
+        return round(wins / (len(pos) * len(neg)), 2)
+
+    def finish_test(self, now):
+        T, t = self.test, self.taste()
+        rounds = T["rounds"]
+        res = {"at": int(time.time()), "n": len(rounds), "liked": sum(r["y"] > 0 for r in rounds), "disliked": sum(r["y"] < 0 for r in rounds),
+               "face": self.auc([(r["face"], r["y"]) for r in rounds]), "taste": self.auc([(r["taste"], r["y"]) for r in rounds])}
+        # if they liked all or none, ranking can't be scored: fall back to "did the face reading point the same way?"
+        signed = [(r["face"] > 0) == (r["y"] > 0) for r in rounds if r["y"] and r["face"] is not None]
+        res["face_agree"] = round(sum(signed) / len(signed), 2) if signed else None
+        if res["face"] is None:
+            res["face"] = res["face_agree"]
+        t.tests.append(res); del t.tests[:-20]
+        self.profiles.dirty = True
+        self.test, self.test_result = None, res
+        def pct(x):
+            return "n/a (rate some yes and some no)" if x is None else f"{x:.0%}"
+        self.event(f"test done for {self.viewer.name}: reading your face {pct(res['face'])}, predicting your taste {pct(res['taste'])} "
+                   f"({res['liked']} liked, {res['disliked']} not)")
+        self.next_step = now + STEP_S
+        if self.dst is not None and self.dst[0] is not None:
+            self.change = None
+
+    # ---------- the live view: where it's leaning and why (dashboard and the phone's Mind panel)
+    def telemetry(self, now):
+        v, t = self.viewer, self.taste()
+        out = self.status(now)
+        out["phone"] = self.phone
+        out["face_now"] = now - self.face_at < 0.5
+        out["e"] = round(self.samples[-1][1], 3) if self.samples and self.samples[-1][1] is not None and now - self.samples[-1][0] < 0.6 else None
+        if self.feats and t is not None and now - self.feats[-1][0] < 0.6:
+            f, w = self.feats[-1][1], t.weights()
+            c = f * w
+            out["drivers"] = [{"feat": FEATS[i], "z": round(float(f[i]), 2), "w": round(float(w[i]), 2), "c": round(float(c[i]), 3)}
+                              for i in np.argsort(-np.abs(c))[:6] if abs(c[i]) > 0.01]
+        if self.emo is not None and now - self.emo[0] < 2:
+            out["emotions"] = {k: round(x, 2) for k, x in self.emo[1].items()}
+        if self.hr is not None and now - self.hr[0] < 4:
+            out["pulse"] = {"bpm": round(self.hr[1]), "q": round(self.hr[2], 2), "used": self.hr[2] >= HR_MIN_Q}
+        c = self.dst[0] if self.dst else None
+        out["painting"] = self.space.to_labels(c) if c is not None else None
+        ch = self.change
+        out["trying"] = None if not ch else {"what": ch.get("what"), "kind": ch["kind"], "landed": "t" in ch,
+                                             "judge_in": round(max(0.0, ch["t"] + JUDGE_TO_S - now), 1) if "t" in ch else None}
+        out["verdicts"] = list(self.verdicts)[-6:]
+        out["events"] = list(self.events)[-8:]
+        if t is not None:
+            out["leaning"] = t.leaning(2)
+            out["accuracy"] = {"taps": t.tap_n, "agreed": t.tap_hits, "tests": t.tests[-5:]}
+            out["weights"] = {FEATS[i]: round(float(x), 2) for i, x in enumerate(t.weights())}
+        out["test"] = None if self.test is None else {"round": self.test["i"] + 1, "of": len(self.test["picks"]), "phase": self.test["phase"]}
+        out["test_result"] = self.test_result
+        return out
+
     # ---------- what the phone shows
     def status(self, now):
         v = self.viewer
@@ -1105,7 +1278,9 @@ class MirrorSession:
                "showing": self.space.caption(c) if c is not None else [], "glow": round(max(-1.0, min(1.0, self.glow / (2 * unit))), 2),
                "recent": round(self.recent / unit, 2), "learning": self.learning, "why": self.reason,
                "judging": bool(self.change and "t" in self.change and now < self.change["t"] + JUDGE_TO_S),
-               "hr": round(self.hr[1]) if self.hr is not None and now - self.hr[0] < 3 and self.hr[2] >= HR_MIN_Q + 0.05 else None}
+               "hr": round(self.hr[1]) if self.hr is not None and now - self.hr[0] < 3 and self.hr[2] >= HR_MIN_Q + 0.05 else None,
+               "test": None if self.test is None else {"round": self.test["i"] + 1, "of": len(self.test["picks"]), "phase": self.test["phase"]},
+               "test_result": self.test_result}
         if t is not None:
             out["top"] = t.top(6)
         return out

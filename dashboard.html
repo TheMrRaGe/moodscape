@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Mirror Mind</title>
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600&family=Young+Serif&display=swap">
+<style>
+/* The Mirror's mind, live: what the phone sees, how it reads the face, what it's trying, where it's leaning, how
+   accurate it has been. Served by the PC painter; read-only. */
+:root{--bg:#07080c;--panel:#0d0f15;--ink:#f3efe6;--dim:rgba(243,239,230,.6);--line:rgba(243,239,230,.12);--gold:#d9b66b;--bad:#ff8a7a;--cool:#9fc6d9;
+  --f-display:"Young Serif",Georgia,serif;--f-ui:"Bricolage Grotesque",system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--f-ui)}
+header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;justify-content:space-between;padding:16px max(16px,env(safe-area-inset-left,0px)) 8px}
+header h1{margin:0;font:400 1.6rem/1.1 var(--f-display)}
+header .meta{color:var(--dim);font-size:.82rem;font-variant-numeric:tabular-nums}
+main{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;padding:8px max(16px,env(safe-area-inset-left,0px)) 24px}
+@media (min-width:1000px){main{grid-template-columns:minmax(0,360px) minmax(0,1fr) minmax(0,1fr)}}
+section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;display:grid;gap:10px;align-content:start;min-width:0}
+h2{margin:0;font:600 .7rem/1 var(--f-ui);text-transform:uppercase;letter-spacing:.14em;color:var(--gold)}
+.big{font:400 1.25rem/1.25 var(--f-display)}
+.dim{color:var(--dim)} .warn{color:var(--bad)} .ok{color:var(--gold)}
+.num{font-variant-numeric:tabular-nums}
+img.paint{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;background:#000;display:block}
+.kv{display:grid;grid-template-columns:6.5rem minmax(0,1fr);gap:3px 10px;font-size:.84rem}
+.kv span:nth-child(odd){color:var(--dim);text-transform:capitalize}
+canvas{width:100%;display:block}
+.bars{display:grid;grid-template-columns:9.5rem minmax(0,1fr) 3.4rem;gap:4px 10px;align-items:center;font-size:.8rem}
+.bar{position:relative;height:8px;border-radius:4px;background:rgba(243,239,230,.07);overflow:hidden}
+.bar i{position:absolute;top:0;bottom:0;border-radius:4px}
+.bar.center::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(243,239,230,.25)}
+.lean{display:grid;grid-template-columns:5.5rem minmax(0,1fr);gap:6px 10px;font-size:.84rem}
+.lean .s{color:var(--dim);text-transform:capitalize}
+.chip{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--line);margin:0 4px 3px 0;white-space:nowrap}
+.chip.sure{border-color:rgba(217,182,107,.6)}
+.log{font:400 .74rem/1.55 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:var(--dim);white-space:pre-wrap;word-break:break-word;max-height:16rem;overflow:auto}
+.v-kept{color:var(--gold)} .v-undone{color:var(--bad)}
+.empty{padding:40px 16px;text-align:center;color:var(--dim)}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.tabs button{font:500 .8rem var(--f-ui);color:var(--ink);background:transparent;border:1px solid var(--line);border-radius:999px;padding:4px 12px;cursor:pointer}
+.tabs button[aria-pressed="true"]{border-color:var(--gold);color:var(--gold)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Mirror Mind</h1>
+  <div class="tabs" id="tabs"></div>
+  <div class="meta" id="meta">Connecting…</div>
+</header>
+<div class="empty" id="empty" hidden>No phone is looking into the mirror right now. Open the Mirror on your phone; this page updates by itself.</div>
+<main id="main" hidden>
+  <section>
+    <h2>On screen</h2>
+    <img class="paint" id="paint" alt="The painting the phone is showing">
+    <div class="big" id="caption">–</div>
+    <div class="kv" id="parts"></div>
+    <h2>Phone</h2>
+    <div class="kv" id="phone"></div>
+  </section>
+  <section>
+    <h2>Reaction</h2>
+    <div class="row"><span class="big num" id="eNow">–</span> <span class="dim" id="eWho"></span></div>
+    <canvas id="chart" width="900" height="260"></canvas>
+    <div class="dim" style="font-size:.78rem">Last 90 seconds. Above the line: <span id="upWord">lighting up</span>. Gold marks: a change it kept. Red: one it undid.</div>
+    <h2>What's driving it right now</h2>
+    <div class="bars" id="drivers"></div>
+    <h2>Trying</h2>
+    <div id="trying" class="dim">–</div>
+    <div id="verdicts" style="font-size:.84rem"></div>
+    <h2>Emotions (AI) and pulse</h2>
+    <div class="bars" id="emotions"></div>
+    <div id="pulse" class="dim"></div>
+  </section>
+  <section>
+    <h2>Leaning toward</h2>
+    <div class="lean" id="lean"></div>
+    <h2>Accuracy</h2>
+    <div id="acc"></div>
+    <h2>How it reads this face</h2>
+    <div class="dim" style="font-size:.78rem">Weight of each signal for this person. Gold counts toward a reaction, red against; it starts from the edition's defaults and moves with Love/Skip/Keep taps and tests.</div>
+    <div class="bars" id="weights"></div>
+    <h2>Decisions</h2>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const NAMES = { smile: "smiling", cheek: "smile lines", wonder: "brows up / eyes wide", jaw: "open mouth", frown: "frowning",
+  browDown: "furrowed brows", sneer: "wrinkled nose", tension: "tight lips", squint: "wincing", lean: "leaning in", offscreen: "looking away",
+  stillness: "going still", blinkRate: "blinking", eyesClosed: "eyes closed", neutral: "neutral (AI)", happy: "happy (AI)", sad: "sad (AI)",
+  angry: "angry (AI)", fearful: "afraid (AI)", disgusted: "disgusted (AI)", surprised: "surprised (AI)", arousal: "pulse up" };
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+let pick = 0, latest = null;
+const hist = {};   // per session index: [{t, e, verdicts}]
+function bar(value, max, center) {
+  const b = el("div", "bar" + (center ? " center" : "")), i = el("i");
+  if (center) { const w = Math.min(50, Math.abs(value) / max * 50); i.style.left = value >= 0 ? "50%" : `${50 - w}%`; i.style.width = `${w}%`; }
+  else { i.style.left = "0"; i.style.width = `${Math.min(100, value / max * 100)}%`; }
+  i.style.background = value >= 0 ? "var(--gold)" : "var(--bad)";
+  b.appendChild(i); return b;
+}
+function connect() {
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/watch`);
+  ws.binaryType = "arraybuffer";
+  ws.onmessage = (ev) => {
+    if (typeof ev.data === "string") { latest = JSON.parse(ev.data); render(); }
+    else {
+      const idx = new Uint32Array(ev.data, 0, 1)[0];
+      if (idx === pick) { const url = URL.createObjectURL(new Blob([new Uint8Array(ev.data, 4)], { type: "image/jpeg" }));
+        const img = $("#paint"), old = img.src; img.src = url; if (old.startsWith("blob:")) setTimeout(() => URL.revokeObjectURL(old), 2000); }
+    }
+  };
+  ws.onopen = () => { $("#meta").textContent = "Connected"; };
+  ws.onclose = () => { $("#meta").textContent = "Disconnected from the painter; retrying…"; setTimeout(connect, 2000); };
+}
+function render() {
+  const L = latest, ss = L.sessions || [];
+  $("#meta").textContent = `${L.gpu} · frame: painting ${L.split[0]} ms, decoding ${L.split[1]} ms, JPEG ${L.split[2]} ms · new paintings encode in ${L.encode_ms} ms`;
+  $("#empty").hidden = ss.length > 0; $("#main").hidden = !ss.length;
+  const tabs = $("#tabs"); tabs.replaceChildren();
+  if (ss.length > 1) ss.forEach((s, i) => { const b = el("button", "", `${s.who ? s.who.name : "nobody"} · ${s.phone_name}`);
+    b.setAttribute("aria-pressed", String(i === pick)); b.onclick = () => { pick = i; render(); }; tabs.appendChild(b); });
+  if (!ss.length) return;
+  if (pick >= ss.length) pick = 0;
+  const s = ss[pick], now = performance.now() / 1000, unease = s.edition === "unease";
+  // history for the chart
+  const h = hist[pick] || (hist[pick] = { pts: [], marks: [], seen: new Set() });
+  h.pts.push({ t: now, e: s.e }); while (h.pts.length && h.pts[0].t < now - 90) h.pts.shift();
+  for (const v of s.verdicts || []) { const k = `${v.t}|${v.what}`; if (!h.seen.has(k)) { h.seen.add(k); h.marks.push({ t: now, r: v.result }); } }
+  while (h.marks.length && h.marks[0].t < now - 90) h.marks.shift();
+  // left column
+  $("#caption").textContent = (s.showing || []).join(" · ") || "–";
+  const parts = $("#parts"); parts.replaceChildren();
+  for (const [k, v] of Object.entries(s.painting || {})) parts.append(el("span", "", k), el("span", "", v));
+  const ph = $("#phone"), d = s.phone || {}; ph.replaceChildren();
+  const row = (k, v, cls) => ph.append(el("span", "", k), el("span", cls || "", v));
+  row("phone", `${s.phone_name}${d.app ? ` (${d.app})` : ""}`);
+  row("face", s.face_now ? `found (${Math.round((d.faceRate || 0) * 100)}% of reads)` : `not found right now${d.faceRate != null ? ` (${Math.round(d.faceRate * 100)}% of reads)` : ""}`, s.face_now ? "ok" : "warn");
+  if (d.light != null) row("light", `${d.light}/255${d.light < 45 ? " · too dark" : ""}`, d.light < 45 ? "warn" : "");
+  if (d.readsPerSec != null) row("tracking", `${d.readsPerSec}/s on ${d.tracker}`);
+  row("emotion AI", d.emotionModel ? `loaded (${d.faMs} ms a read${d.faMissRate != null ? `, misses ${Math.round(d.faMissRate * 100)}%` : ""})` : "not loaded", d.emotionModel ? "" : "warn");
+  row("recognition", d.recognition ? `on (${d.idSent ?? 0} reads sent${d.idNote ? `; ${d.idNote}` : ""})` : "off (this phone's own mirror)");
+  row("camera", d.video || "–"); row("stream", `${s.fps} fps`);
+  if (d.error) row("error", d.error, "warn");
+  // reaction
+  $("#eNow").textContent = s.e == null ? "–" : `${s.e > 0 ? "+" : ""}${s.e.toFixed(2)}`;
+  $("#eWho").textContent = s.who ? `${s.who.name} · ${unease ? "Unease" : "Bliss"} · ${s.who.reactions} reactions learned` : s.seeing === "identifying" ? "someone's there (identifying…)" : "nobody looking";
+  $("#upWord").textContent = unease ? "unsettled" : "lighting up";
+  const c = $("#chart"), g = c.getContext("2d"), W = c.width, H = c.height; g.clearRect(0, 0, W, H);
+  g.strokeStyle = "rgba(243,239,230,.18)"; g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
+  for (const m of h.marks) { const x = W - (now - m.t) / 90 * W; g.fillStyle = m.r === "kept" ? "#d9b66b" : m.r === "undone" ? "#ff8a7a" : "rgba(243,239,230,.25)"; g.fillRect(x - 1.5, 0, 3, H); }
+  g.strokeStyle = unease ? "#9fc6d9" : "#f3dc9c"; g.lineWidth = 3; g.beginPath(); let pen = false;
+  for (const p of h.pts) { if (p.e == null) { pen = false; continue; } const x = W - (now - p.t) / 90 * W, y = H / 2 - Math.max(-2.2, Math.min(2.2, p.e)) * H / 4.8; pen ? g.lineTo(x, y) : g.moveTo(x, y); pen = true; }
+  g.stroke();
+  const dr = $("#drivers"); dr.replaceChildren();
+  for (const x of s.drivers || []) dr.append(el("span", "", NAMES[x.feat] || x.feat), bar(x.c, 1.2, true), el("span", "dim num", `${x.c > 0 ? "+" : ""}${x.c.toFixed(2)}`));
+  if (!(s.drivers || []).length) dr.append(el("span", "dim", s.face_now ? "calm face" : "no face"), el("span"), el("span"));
+  const tr = s.trying;
+  $("#trying").textContent = s.test ? `Test round ${s.test.round} of ${s.test.of}: ${s.test.phase === "rate" ? "waiting for a rating" : "watching their face"}`
+    : tr ? `${tr.what}${tr.landed ? (tr.judge_in > 0 ? ` · judging the face for another ${tr.judge_in.toFixed(1)} s` : " · deciding") : " · painting it"}` : "Holding this painting.";
+  const vd = $("#verdicts"); vd.replaceChildren();
+  for (const v of (s.verdicts || []).slice().reverse()) vd.append(el("div", `v-${v.result}`, `${v.result === "kept" ? "✓ kept" : v.result === "undone" ? "↶ undid" : "· left"} ${v.what} (${v.d > 0 ? "+" : ""}${v.d})`));
+  const em = $("#emotions"); em.replaceChildren();
+  for (const [k, v] of Object.entries(s.emotions || {})) em.append(el("span", "", k), bar(v, 1, false), el("span", "dim num", `${Math.round(v * 100)}%`));
+  if (!s.emotions) em.append(el("span", "dim", "no emotion reads"), el("span"), el("span"));
+  $("#pulse").textContent = s.pulse ? `Pulse ${s.pulse.bpm} bpm, quality ${s.pulse.q} ${s.pulse.used ? "(used)" : "(too noisy to use)"}` : "No pulse reading (needs steady light and a still face).";
+  // leaning
+  const ln = $("#lean"); ln.replaceChildren();
+  for (const l of s.leaning || []) {
+    const v = el("div");
+    for (const t of l.top) v.appendChild(el("span", "chip" + (t.sure > 0.15 ? " sure" : ""), `${t.item}${t.sure > 0.15 ? "" : " ?"}`));
+    v.appendChild(el("span", "dim", ` least: ${l.bottom}`));
+    ln.append(el("span", "s", l.slot), v);
+  }
+  if (!(s.leaning || []).length) ln.append(el("span", "s", "–"), el("span", "dim", "Nobody to learn about yet."));
+  const a = s.accuracy, acc = $("#acc"); acc.replaceChildren();
+  if (a) {
+    acc.append(el("div", "", a.taps ? `Love/Skip taps that agreed with what it read just before: ${a.agreed} of ${a.taps} (${Math.round(100 * a.agreed / a.taps)}%).` : "No Love/Skip taps yet to check its reading against."));
+    for (const t of (a.tests || []).slice().reverse()) acc.append(el("div", "dim", `${new Date(t.at * 1000).toLocaleString()}: reading the face ${t.face == null ? "n/a" : Math.round(t.face * 100) + "%"}, predicting taste ${t.taste == null ? "n/a" : Math.round(t.taste * 100) + "%"} (${t.liked} liked, ${t.disliked} not; 50% = guessing)`));
+    if (!(a.tests || []).length) acc.append(el("div", "dim", "Run \"Test how well it reads me\" on the phone (Mind panel or People) for a direct score."));
+  } else acc.append(el("div", "dim", "–"));
+  const wt = $("#weights"); wt.replaceChildren();
+  for (const [k, v] of Object.entries(s.weights || {}).sort((x, y) => Math.abs(y[1]) - Math.abs(x[1])))
+    wt.append(el("span", "", NAMES[k] || k), bar(v, 1, true), el("span", "dim num", `${v > 0 ? "+" : ""}${v.toFixed(2)}`));
+  $("#log").textContent = (s.events || []).slice().reverse().join("\n");
+}
+connect();
+</script>
+</body>
+</html>
