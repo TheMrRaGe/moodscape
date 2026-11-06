@@ -200,14 +200,21 @@ Nothing about the viewer goes into a capture.
 2. Open it. Android asks you to allow installs from your browser once.
 3. Open it. **On the same Wi-Fi as the laptop, it finds the painter by itself.** Away from home, tap **Scan the QR code** and point it at the code on the laptop's dashboard (or the one the painter prints), or paste the link.
 
-How it finds the laptop: every 2 seconds the painter announces itself on the local network (a UDP broadcast on port 47823) with its local address and its current public link. The broadcast never leaves your network; `--no-beacon` turns it off. On the same Wi-Fi, the app connects straight over the network, which is faster than the internet link. It also saves the newest public link for when you leave. When the painter restarts, the app finds it again. Away from home after a restart, the public link has changed, so scan the new QR code (**People → Change laptop**).
+How it finds the laptop: every 2 seconds the painter announces itself on the local network (a UDP broadcast on port 47823) with its local address and its current public link. The broadcast never leaves your network; `--no-beacon` turns it off. On the same Wi-Fi, the app connects straight over the network, which is faster than the internet link. It also saves the newest public link for when you leave. When the painter restarts, the app finds it again.
+
+**Away from home**, the app finds the new link through a private relay channel. Every time the public link changes (and every 6 hours), the painter posts it to a channel on [ntfy.sh](https://ntfy.sh), a free relay that keeps messages for 12 hours. The channel's name is a long random one, made once and kept in `pc-painter/pairing.json` (git-ignored). The app learns the name the first time it connects. When the saved link stops working, the app reads the newest one from the channel.
+- Anyone who knew the channel name could read the links posted there. The app only gets the name from the laptop: over your Wi-Fi, or while it's connected.
+- To change the name, delete `pairing.json`, then reconnect the app once over Wi-Fi or with the QR code.
+- `--no-relay` turns the relay off.
+
+If the relay doesn't reach the app, scan the new QR code (**People → Change laptop**).
 
 **Starts by itself:** after the first time, opening the app starts the camera right away with your earlier face-recognition choice. Turn that off in **People → Start by itself when I open the mirror**. The painting still happens on the laptop; the app is the phone's half.
 
 To rebuild after changing `mirror.html`, run `ANDROID_HOME=… bash android/build.sh <versionCode> <versionName>` (see the top of the script for what it needs). The first build makes a signing key in `android/` (git-ignored). Keep it: Android only installs an update over the old app if it's signed with the same key.
 
 **Notes:**
-- The public link changes every time the painter restarts. The app picks up the new one by itself on the same Wi-Fi; elsewhere, scan the new QR code.
+- The public link changes every time the painter restarts. The app picks up the new one by itself, on the same Wi-Fi or through the relay.
 - Speed is whatever the laptop's GPU manages; under 6 fps it looks like a slow dissolve. Up to four frames are in flight at once, so the tunnel's round trip doesn't cap the frame rate.
 - `start-windows.bat` still works exactly as before for the mood app. Both apps share the one painter.
 

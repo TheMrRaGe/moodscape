@@ -283,6 +283,7 @@ const CFG = {
 };
 const EMOTIONS = ["neutral", "happy", "sad", "angry", "fearful", "disgusted", "surprised"];
 const PC_KEY = "moodscape-mirror-pc";
+const RELAY_KEY = "moodscape-mirror-relay";   // the laptop's private ntfy.sh channel, where it posts each new link
 const DEVICE_KEY = "moodscape-mirror-device";
 function deviceId() {   // a random id for this phone, used instead of a face when recognition is off
   let id = ""; try { id = localStorage.getItem(DEVICE_KEY) || ""; } catch {}
@@ -328,8 +329,28 @@ function heardBeacon() {
     const ip4 = (ip) => typeof ip === "string" && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip);
     const ips = [...new Set([b.from, ...(Array.isArray(m.lan) ? m.lan : [])].filter(ip4))];
     const tunnel = typeof m.tunnel === "string" && /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(m.tunnel) ? m.tunnel : "";
+    rememberRelay(m.relay);
     return { lan: ips.map((ip) => `http://${ip}:${port}`), tunnel, host: String(m.host || "").slice(0, 40) };
   } catch { return null; }
+}
+function rememberRelay(topic) {
+  if (typeof topic === "string" && /^moodscape-[0-9a-f]{32}$/.test(topic)) try { localStorage.setItem(RELAY_KEY, topic); } catch {}
+}
+/* Away from home: the laptop posts every new public link to its private channel on ntfy.sh (a free relay that keeps
+   messages for 12 hours). The app learned the channel's name the last time it was connected, so it reads the
+   newest link from there. */
+async function fromRelay() {
+  let topic = ""; try { topic = localStorage.getItem(RELAY_KEY) || ""; } catch {}
+  if (!/^moodscape-[0-9a-f]{32}$/.test(topic)) return "";
+  try {
+    const r = await fetch(`https://ntfy.sh/${topic}/json?poll=1&since=12h`, { cache: "no-store", signal: AbortSignal.timeout(8000) });
+    const links = (await r.text()).split("\n").map((l) => { try { return JSON.parse(JSON.parse(l).message).tunnel; } catch { return ""; } })
+      .filter((u) => typeof u === "string" && /^https:\/\/[a-z0-9-]+\.trycloudflare\.com$/i.test(u));
+    for (const u of links.reverse().slice(0, 3)) {   // newest first
+      if (await probePainter(u)) { try { localStorage.setItem(PC_KEY, u); } catch {} return u; }
+    }
+  } catch {}
+  return "";
 }
 async function discover(waitMs) {
   if (!window.MoodscapeNative) return "";
@@ -349,6 +370,9 @@ async function resolvePainter(waitMs = 2600) {
   const near = await discover(waitMs);
   if (near) return near;
   let saved = ""; try { saved = localStorage.getItem(PC_KEY) || ""; } catch {}
+  if (saved && await probePainter(saved)) return saved;
+  const relayed = await fromRelay();
+  if (relayed) { logLine("found your laptop's new link through its private relay channel"); return relayed; }
   return saved;
 }
 const viaWifi = (base) => /^http:\/\/\d/.test(base);
@@ -483,7 +507,7 @@ let lastStatus = null, lastCaption = "", lastWhy = "";
 function onJson(text) {
   let d; try { d = JSON.parse(text); } catch { return; }
   if (d.hello) {
-    net.host = d.hello.host; net.gpu = d.hello.gpu;
+    net.host = d.hello.host; net.gpu = d.hello.gpu; rememberRelay(d.hello.relay);
     const eds = Object.entries(d.hello.editions || {}).map(([e, n]) => `${e} ${Number(n).toLocaleString()}`).join(", ");
     logLine(`painting on ${d.hello.host} (${d.hello.gpu}, ${d.hello.provider}) · possible paintings: ${eds} · new ones encode in ${d.hello.encode_ms} ms`);
   }

@@ -61,7 +61,7 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
-        public String version() { return "1.3"; }
+        public String version() { return "1.4"; }
     }
 
     void startListening() {

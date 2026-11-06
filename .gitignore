@@ -10,3 +10,4 @@ pc-painter/status/
 pc-painter/control/
 __pycache__/
 *.pyc
+pc-painter/pairing.json

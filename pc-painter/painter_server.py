@@ -12,6 +12,7 @@ turns those into frames as fast as its GPU allows and streams them back.
     python painter_server.py --max-fps 15 --motion 0.5
     python painter_server.py --qr mirror  # the QR code opens the Mirror instead of Moodscape
     python painter_server.py --no-beacon  # don't announce this PC on the local Wi-Fi
+    python painter_server.py --no-relay   # don't post the new public link to the app's private relay channel
 
 Mirror mode (mirror.html + mirror.py): the phone sends face numbers (and, if the viewer agreed, a face
 fingerprint); this PC works out who is looking and evolves a painting in real time toward what that person
@@ -479,7 +480,8 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
 
         await send_json({"hello": {"host": platform.node(), "gpu": painter.gpu, "provider": painter.provider.replace("ExecutionProvider", ""),
                                    "fps": round(painter.fps, 1), "encode_ms": round(painter.spaces["bliss"].encode_ms),
-                                   "editions": {e: math.prod(sp.sizes) for e, sp in painter.spaces.items()}}})
+                                   "editions": {e: math.prod(sp.sizes) for e, sp in painter.spaces.items()},
+                                   "relay": LINK["relay"]}})   # the app keeps this to find the next link after a restart
         await send_json({"people": sess.people()})
 
         async def render_loop():
@@ -712,7 +714,58 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
 # ---------------------------------------------------------------- finding this PC on the local Wi-Fi
 
 BEACON_PORT = 47823          # UDP; the Android app listens for this
-LINK = {"tunnel": None}      # the current public (Cloudflare) address, once it's up
+LINK = {"tunnel": None, "relay": None}   # the current public (Cloudflare) address once it's up; the relay channel
+RELAY_HOST = "https://ntfy.sh"
+RELAY_EVERY = 6 * 3600       # ntfy.sh keeps messages 12 hours, so repost well before they expire
+
+
+def relay_topic():
+    """The app's private relay channel: a long random name made once and kept in pairing.json (git-ignored).
+    Whoever knows the name can read the links posted to it, so it's only handed to the paired app."""
+    f = HERE / "pairing.json"
+    try:
+        t = json.loads(f.read_text(encoding="utf-8")).get("topic", "")
+        if re.fullmatch(r"moodscape-[0-9a-f]{32}", t):
+            return t
+    except (OSError, ValueError):
+        pass
+    t = "moodscape-" + os.urandom(16).hex()
+    f.write_text(json.dumps({"topic": t, "relay": RELAY_HOST,
+                             "note": "The Mirror app's private channel for finding this PC's new link. Delete this file to "
+                                     "make a new one (then open the app once on the same Wi-Fi, or scan the QR code)."}, indent=2),
+                 encoding="utf-8")
+    return t
+
+
+def relay_post(url):
+    """Post the new public link to the relay channel, so the app finds the laptop after a restart even away from home."""
+    topic = LINK["relay"]
+    if not topic:
+        return
+    body = json.dumps({"app": "moodscape-mirror", "v": 1, "tunnel": url, "host": platform.node()[:40]}).encode()
+    for wait in (20, 90, None):      # a couple of retries: the relay sometimes says "too many requests"
+        try:
+            req = urllib.request.Request(f"{RELAY_HOST}/{topic}", data=body, method="POST",
+                                         headers={"Title": "Moodscape Mirror", "Cache": "yes", "User-Agent": "moodscape-mirror"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                r.read()
+            log("relay: posted the new link to the app's private channel, so the app can find this PC away from home")
+            return
+        except Exception as e:
+            if wait is None or LINK["tunnel"] != url:
+                log(f"relay: couldn't post the new link ({e}); away from home, scan the QR code instead")
+                return
+            time.sleep(wait)
+
+
+def start_relay():
+    LINK["relay"] = relay_topic()
+    def run():
+        while True:
+            time.sleep(RELAY_EVERY)
+            if LINK["tunnel"]:
+                relay_post(LINK["tunnel"])
+    threading.Thread(target=run, daemon=True, name="relay").start()
 
 
 def lan_addresses():
@@ -731,7 +784,7 @@ def lan_addresses():
 
 def beacon_message(port):
     return json.dumps({"app": "moodscape-mirror", "v": 1, "port": port, "lan": lan_addresses(),
-                       "tunnel": LINK["tunnel"], "host": platform.node()[:40]}, separators=(",", ":")).encode()
+                       "tunnel": LINK["tunnel"], "relay": LINK["relay"], "host": platform.node()[:40]}, separators=(",", ":")).encode()
 
 
 def start_beacon(port, every=2.0):
@@ -828,6 +881,7 @@ def write_link_status(url, target, which):
 
 def show_link(url, which="moodscape"):
     LINK["tunnel"] = url
+    threading.Thread(target=relay_post, args=(url,), daemon=True).start()
     pair = f"{APP_URL}#pc={url}"
     mirror_url = f"{url}/mirror.html"
     target = mirror_url if which == "mirror" else pair
@@ -863,6 +917,7 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-tunnel", action="store_true", help="don't open a Cloudflare tunnel")
     ap.add_argument("--no-beacon", action="store_true", help="don't announce this PC on the local Wi-Fi for the Android app")
+    ap.add_argument("--no-relay", action="store_true", help="don't post the new public link to the app's private ntfy.sh channel")
     ap.add_argument("--cpu", action="store_true", help="force CPU instead of the graphics card")
     ap.add_argument("--gpu", type=int, default=None, help="Windows: which graphics adapter to use (they're listed at startup)")
     ap.add_argument("--max-fps", type=float, default=24, help="cap the stream's frame rate (default 24)")
@@ -888,6 +943,8 @@ def main():
     log(f"server: app, live stream and painter on http://localhost:{a.port}/ (stream capped at {a.max_fps:g} fps)")
     log(f"server: Mirror on http://localhost:{a.port}/mirror.html (works with this PC's own webcam too)")
     log(f"server: live dashboard (what it reads, where it's leaning, accuracy) on http://localhost:{a.port}/dashboard.html")
+    if not a.no_relay and not a.no_tunnel:
+        start_relay()
     tunnel = None if a.no_tunnel else start_tunnel(a.port, a.qr)
     if not a.no_beacon:
         start_beacon(a.port)

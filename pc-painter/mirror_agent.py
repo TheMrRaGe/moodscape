@@ -14,7 +14,7 @@ It starts the painter in Mirror mode right away, then watches control/command.tx
     start | stop | restart | status
 
 optionally followed by painter options, e.g.  restart --gpu 1  or  restart --max-fps 15 --motion 0.5
-Only these options are accepted: --gpu N, --max-fps N, --motion X, --cpu, --no-tunnel. Anything else is refused,
+Only these options are accepted: --gpu N, --max-fps N, --motion X, --cpu, --no-tunnel, --no-beacon, --no-relay. Anything else is refused,
 so the file can't be used to run other commands.
 
 It writes:
@@ -29,7 +29,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CONTROL, STATUS = HERE / "control", HERE / "status"
 COMMAND = CONTROL / "command.txt"
-ALLOWED = re.compile(r"^(--gpu \d{1,2}|--max-fps \d{1,2}(\.\d+)?|--motion [01](\.\d+)?|--cpu|--no-tunnel)$")
+ALLOWED = re.compile(r"^(--gpu \d{1,2}|--max-fps \d{1,2}(\.\d+)?|--motion [01](\.\d+)?|--cpu|--no-tunnel|--no-beacon|--no-relay)$")
 WINDOWS = platform.system() == "Windows"
 LOCK_PORT = 47824            # held while an agent runs, so a second one knows
 DASHBOARD = "http://localhost:8765/dashboard.html"
