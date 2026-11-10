@@ -1,0 +1,26 @@
+# Unity
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+*.csproj
+*.sln
+*.user
+.vs/
+.vscode/
+# the fear-engine test harness keeps its project file
+!/Tests/fear-sim/sim.csproj
+/Tests/fear-sim/bin/
+/Tests/fear-sim/obj/
+/Tests/fear-sim/fear-sim-data/
+# downloaded CC0 models: fetched by tools/fetch_models.py, not stored in git
+/Assets/NightPages/Resources/NPModels/
+/Assets/NightPages/Resources/NPModels.meta
+__pycache__/
+# headless test runs and the Unity agent's working files
+/runs/
+/agent/

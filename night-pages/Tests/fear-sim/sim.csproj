@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Runs the real FearEngine.cs against a simulated player, outside Unity. Use: dotnet run -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>9.0</LangVersion>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Assets/NightPages/Scripts/FearEngine.cs" />
+    <Compile Include="../../Assets/NightPages/Scripts/FearTypes.cs" />
+    <Compile Include="Shim.cs" />
+    <Compile Include="Main.cs" />
+  </ItemGroup>
+</Project>
