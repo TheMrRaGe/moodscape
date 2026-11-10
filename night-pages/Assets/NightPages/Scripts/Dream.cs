@@ -34,6 +34,9 @@ namespace NightPages
         readonly List<Transform> props = new List<Transform>();
         readonly List<Pending> pending = new List<Pending>();
         Material paintMat;
+        DreamMaze maze;
+        float deadline, nightLength, timerShown;
+        int warned;
         Texture2D fallback;
         Color[] fallbackPx;
 
@@ -51,6 +54,15 @@ namespace NightPages
         }
 
         /// <summary>The texture hung on walls: the live Moodscape painting, or a stand-in when the painter is off.</summary>
+        /// <summary>The maze this dream is (see DreamMaze), while one is running.</summary>
+        public DreamMaze Maze { get { return maze; } }
+
+        /// <summary>Seconds of night left to get out in.</summary>
+        public float TimeLeft { get { return maze != null ? Mathf.Max(0f, deadline - Time.time) : 0f; } }
+
+        /// <summary>More night (a page read), or less.</summary>
+        public void AddTime(float seconds) { deadline += seconds; }
+
         public Texture PaintingTexture { get { return g.link.HasFrame && g.link.Live ? (Texture)g.link.Tex : fallback; } }
 
         void PaintFallback(float t)
@@ -94,17 +106,49 @@ namespace NightPages
             g.fear.onApply = OnEngineApply;
             g.fear.canChange = s => !FearEngine.IsLook(s) || (monster != null && !monster.Pending);
             g.fear.BeginDream(day, Time.time);
-            BuildSpace(Cur[FearEngine.Space]);
+            BuildMaze();
             for (int s = 1; s < FearEngine.Slots.Length; s++) ApplySlot(s, Cur[s]);
 
             doorAt = Time.time + 40f + 6f * day;
             hardEnd = Time.time + 170f;
         }
 
+        // The dream is a maze of rooms that rearranges itself where you aren't looking, bigger on later nights.
+        void BuildMaze()
+        {
+            if (space != null) Destroy(space.gameObject);
+            ClearProps();
+            space = new GameObject("Space").transform;
+            space.SetParent(root, false);
+            wallsT = null;
+            g.player.speedMul = 1f;
+            g.player.Crouch(false);
+            shrink = 1f;
+            hx = hz = 400f; ceil = DreamMaze.H; roofed = true;
+            int size = day <= 2 ? 4 : day <= 4 ? 5 : 6;
+            maze = new DreamMaze(g, root, size, day, Random.Range(1, 1000000), paintMat);
+            // Hard, not impossible: enough night to cross it twice over, not enough to see all of it.
+            nightLength = 60f + size * size * 4.5f;
+            deadline = Time.time + nightLength;
+            warned = 0;
+            timerShown = -1f;
+            var fog = new Color(0.02f, 0.016f, 0.016f);
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+            RenderSettings.ambientLight = new Color(0.06f, 0.06f, 0.07f);
+            RenderSettings.fog = true;
+            RenderSettings.fogMode = FogMode.Exponential;
+            RenderSettings.fogColor = fog;
+            RenderSettings.fogDensity = 0.06f;
+            Cam.backgroundColor = fog;
+            g.Log("dream: " + nightLength.ToString("0") + " s of night to find the way out");
+        }
+
         public void Clear()
         {
             Tour.Step("dream clear: start");
             active = false;
+            if (maze != null) maze.Destroy();
+            maze = null;
             g.fear.onApply = null;
             g.fear.canChange = null;
             monster = null;
@@ -130,9 +174,20 @@ namespace NightPages
             g.OnDreamEnd(caught);
         }
 
+        // Not getting out is dying: run out of night, or let it reach you.
+        void Die(string how)
+        {
+            if (ending) return;
+            ending = true;
+            g.fear.EndDream();
+            g.SaveTeller();
+            g.OnDreamDeath(how);
+        }
+
         void OnEngineApply(int slot, int opt)
         {
-            if (slot == FearEngine.Space) StartCoroutine(Cut(opt));
+            if (slot == FearEngine.Space && maze != null) maze.Shift(PlayerPos, Cam);      // a new "space" is the maze rearranging itself
+            else if (slot == FearEngine.Space) StartCoroutine(Cut(opt));
             else ApplySlot(slot, opt);
         }
 
@@ -158,6 +213,7 @@ namespace NightPages
         public void ShowSpace(int k)
         {
             g.fear.current[FearEngine.Space] = k;
+            if (maze != null) { maze.Destroy(); maze = null; foreach (Transform c in root) if (c.name == "Maze") Destroy(c.gameObject); }
             BuildSpace(k);
             for (int s = 1; s < FearEngine.Slots.Length; s++) ApplySlot(s, Cur[s]);
             g.player.Teleport(Origin + new Vector3(0f, 0.1f, 0f), 0f);
@@ -291,6 +347,7 @@ namespace NightPages
         /// <summary>A point on the floor between min and max metres from the player, inside the space.</summary>
         Vector3 RandomPoint(float min, float max, bool preferUnseen)
         {
+            if (maze != null) return maze.RandomPoint(PlayerPos, Mathf.Min(min, 30f), Mathf.Min(max, 36f), preferUnseen, Cam);
             Vector3 best = PlayerPos;
             for (int i = 0; i < 40; i++)
             {
@@ -538,6 +595,8 @@ namespace NightPages
                 if (want == fallback) PaintFallback(now);
             }
 
+            if (maze != null) { UpdateMaze(now, pp); return; }
+
             if (exit == null && now >= doorAt)
             {
                 PlaceExit();
@@ -568,6 +627,41 @@ namespace NightPages
             }
         }
 
+        // The maze: it changes, the night runs down, and the way out is a door with a clock ticking behind it.
+        void UpdateMaze(float now, Vector3 pp)
+        {
+            if (ending) return;
+            float left = deadline - now;
+            maze.Tick(pp, Cam, Mathf.Clamp01(left / nightLength));
+            float d = (maze.ExitPosition - pp).magnitude;
+            if (day >= 3 && !exitMoved && d < 5.5f && maze.RoomsToExit(pp) == 0 && left > 35f)
+            {
+                exitMoved = true;
+                if (maze.MoveExit(pp, Cam))
+                {
+                    Sfx.Ui("creak", 0.6f, 0.7f);
+                    g.hud.Say("Not that one.", 3f);
+                }
+            }
+            else if (d < 1.5f)
+            {
+                g.Steady(0.03f, "got out of the dream with " + Mathf.Max(0f, left).ToString("0") + " s of night left");
+                g.Log("dream: out of the maze (" + maze.Size + " by " + maze.Size + ", it changed " + maze.shifts + " times, " + maze.pagesRead + " of " + maze.pagesPlaced + " pages read)");
+                End(false);
+                return;
+            }
+            if (Mathf.Floor(left) != timerShown) { timerShown = Mathf.Floor(left); g.RefreshDreamTimer(); }
+            if (warned == 0 && left < nightLength * 0.5f) { warned = 1; g.hud.Say("It's getting light somewhere. Not in here.", 3.5f); }
+            else if (warned == 1 && left < 30f) { warned = 2; g.hud.Say("You're running out of night.", 3.5f); Sfx.Ui("sting", 0.35f, 0.6f); }
+            else if (warned == 2 && left < 10f) { warned = 3; g.hud.Say("Wake up. Wake up.", 3.5f); }
+            if (left <= 0f)
+            {
+                g.Log("dream: the night ran out in the maze, " + maze.RoomsToExit(pp) + " rooms from the way out");
+                Sfx.Ui("sting", 0.9f);
+                Die("the night ran out");
+            }
+        }
+
         void UpdateLight(float now, Vector3 pp)
         {
             int mode = Cur[FearEngine.Light];
@@ -582,6 +676,13 @@ namespace NightPages
                 c = new Color(1f, 0.85f, 0.6f); intensity = 1.5f; range = 9f;
             }
             else if (mode == 4) intensity = 0.1f;
+            if (maze != null)
+            {
+                // Indoors and close: you see the room you're in and a little of the next. In the last half-minute the light goes bad.
+                range = 11f;
+                float left = deadline - now;
+                if (left < 30f) { c = Color.Lerp(new Color(1f, 0.12f, 0.06f), c, Mathf.Clamp01(left / 30f)); intensity *= Mathf.Lerp(0.75f, 1f, Mathf.Clamp01(left / 30f)); }
+            }
             lamp.transform.position = pp + offset;
             lamp.color = Color.Lerp(lamp.color, c, Time.deltaTime * 3f);
             lamp.intensity = mode == 1 ? intensity : Mathf.Lerp(lamp.intensity, intensity, Time.deltaTime * 3f);
@@ -643,11 +744,12 @@ namespace NightPages
                 if (!Vis.Sees(Cam, monster.HeadPoint, figure))
                 {
                     Vector3 to = pp - figure.position; to.y = 0f;
-                    figure.position += to.normalized * Mathf.Min(2.4f * dt, to.magnitude);
+                    figure.position += to.normalized * Mathf.Min((maze != null ? 1.5f : 2.4f) * dt, to.magnitude);
                 }
                 if (dist < 1.2f && !ending)
                 {
                     Sfx.Ui("sting", 0.9f);
+                    if (maze != null) { g.Log("dream: it reached you in the maze"); Die("it reached you"); return; }
                     g.Log("dream: it reached you; waking early");
                     End(true);
                     return;

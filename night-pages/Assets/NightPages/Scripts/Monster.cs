@@ -154,10 +154,13 @@ namespace NightPages
         }
 
         /// <summary>
-        /// Becoming something else, gradually, in front of you. Both bodies are melted into one field and it goes
-        /// through the shapes in between, but not smoothly: it holds, lurches forward, slips back a stage, seizes,
-        /// lurches again. Its flesh boils halfway. Each lurch is a crack of something giving. In the dark, by a
-        /// failing light, it looks like something that can't decide what it is.
+        /// Becoming something else in front of you, the way a shapeshifter does it in a film: one body grows out of the
+        /// other. New limbs bud from its core and stretch out one at a time while the old ones draw back into it; for
+        /// most of it, it is both things at once, melted together. The flesh slides continuously between the shapes
+        /// (never stepping), writhes, heaves and swells; the new skin spreads over it like a stain with a raw wet edge;
+        /// eyes and teeth sink into it and new ones surface after. It is never at one speed: it surges, stalls, slides
+        /// back a little, surges again. In the dark, by a failing bulb, it looks like something that can't decide what
+        /// it is. `pace` stretches or shortens it (1 = about six seconds).
         /// </summary>
         public IEnumerator TransformInto(int[] to, float pace = 1f)
         {
@@ -171,70 +174,168 @@ namespace NightPages
             next.SetVisible(false);
             Vector3 home = transform.position;
             Quaternion homeRot = transform.rotation;
-            const int Steps = 14;
-            var job = Flesh.Morph(rig, next.rig, transform, 0.032f, 0.035f, Steps, seed);
-            // While it works out what it is becoming, it seizes where it stands.
+            const int Steps = 56;
+            var job = Flesh.Morph(rig, next.rig, transform, 0.034f, 0.035f, Steps, seed);
+            var shader = Shader.Find("NightPages/Becoming");
+            float clock = 0f;
+            // While the first shapes come, it seizes where it stands: a slow shudder, not a jitter.
             Sfx.At("creak", HeadPos, 0.7f, 0.5f);
-            while (!job.Done)
+            while (shader != null && !job.Failed && job.Ready < 8 && !job.Done)
             {
-                transform.SetPositionAndRotation(home + Random.insideUnitSphere * 0.015f, homeRot * Quaternion.Euler(Random.Range(-2f, 2f), Random.Range(-4f, 4f), Random.Range(-2f, 2f)));
+                clock += Time.deltaTime;
+                Heave(home, homeRot, clock, 0.5f);
                 yield return null;
             }
-            List<Mesh> frames = (job.task != null && !job.task.IsFaulted) ? job.Meshes() : null;
-            if (frames == null || frames.Count == 0)
+            if (shader == null || job.Failed || job.MeshAt(0) == null)
             {
+                if (shader == null) Debug.LogWarning("[NightPages] the Becoming shader is missing: it changes in one step");
                 Rebuild(to);
                 Destroy(next.gameObject);
                 transform.SetPositionAndRotation(home, homeRot);
                 Transforming = false;
                 yield break;
             }
-            Material fromMat = BodyMaterial(), toMat = next.BodyMaterial();
+
+            var mat = new Material(shader) { name = "Becoming" };
+            Feed(BodyMaterial(), mat, "");
+            Feed(next.BodyMaterial(), mat, "2");
+            mat.SetVector("_Core", job.core);
+            mat.SetFloat("_Radius", job.radius);
+            mat.SetFloat("_Seed", seed % 10f);
             var shapeGo = new GameObject("Becoming");
             shapeGo.transform.SetParent(transform, false);
             var mf = shapeGo.AddComponent<MeshFilter>();
             var mr = shapeGo.AddComponent<MeshRenderer>();
-            mr.sharedMaterial = fromMat;
-            SetVisible(false);
-            // Not straight through: it gets most of the way to a stage, slips back, then lurches further.
-            var order = new List<int>();
-            int at = 0;
-            order.Add(0);
+            mr.sharedMaterial = mat;
+            mf.sharedMesh = job.MeshAt(0);
+
+            // Its body becomes the shifting flesh; its eyes, teeth and loose parts stay, and sink into it.
+            var sinking = new List<KeyValuePair<Transform, Vector3>>();
+            var oldBody = new List<Renderer>();
+            foreach (var r in rig.GetComponentsInChildren<Renderer>())
+            {
+                if (!r.enabled) continue;
+                if (r is SkinnedMeshRenderer) oldBody.Add(r);
+                else sinking.Add(new KeyValuePair<Transform, Vector3>(r.transform, r.transform.localScale));
+            }
+            // The shifting flesh comes up through its skin in patches (no cut from one body to the other).
+            for (float h = 0f; h < 0.45f; h += Time.deltaTime)
+            {
+                clock += Time.deltaTime;
+                mat.SetFloat("_Dissolve", 1f - h / 0.45f);
+                mat.SetFloat("_Writhe", 0.3f * h / 0.45f);
+                Heave(home, homeRot, clock, 0.35f);
+                yield return null;
+            }
+            mat.SetFloat("_Dissolve", 0f);
+            foreach (var r in oldBody) if (r != null) r.enabled = false;
+
+            float duration = 6f * pace, speed = (Steps - 1) / duration;
+            float q = 0f, most = 0f, tm = 0f;
+            int shown = 0, lastSound = 0;
             var rng = new System.Random((int)(seed * 977f));
-            while (at < Steps - 1)
+            while (q < Steps - 1 && tm < 60f)
             {
-                int fwd = 1 + rng.Next(3);
-                at = Mathf.Min(Steps - 1, at + fwd);
-                order.Add(at);
-                if (at < Steps - 1 && rng.NextDouble() < 0.35) { order.Add(Mathf.Max(0, at - 1 - rng.Next(2))); order.Add(at); }
-            }
-            int last = -1;
-            foreach (int i in order)
-            {
-                if (frames[i] == null) continue;
-                mf.sharedMesh = frames[i];
-                if (i >= Steps / 2) mr.sharedMaterial = toMat;
-                bool forward = i > last;
-                last = i;
-                if (forward) Sfx.At(rng.NextDouble() < 0.5 ? "crack" : "creak", home + Vector3.up * 1.2f, 0.55f, 0.6f + (float)rng.NextDouble() * 0.6f);
-                // Each stage: a jolt, then a hold that is never the same length twice, shaking.
-                float hold = (0.12f + (float)rng.NextDouble() * 0.45f) * pace;
-                Vector3 squash = new Vector3(1f + Random.Range(-0.06f, 0.06f), 1f + Random.Range(-0.08f, 0.08f), 1f + Random.Range(-0.06f, 0.06f));
-                for (float h = 0f; h < hold; h += Time.deltaTime)
+                float dt = Time.deltaTime;
+                tm += dt;
+                clock += dt;
+                // Surges and lulls, and now and then it slides back a little before going on.
+                float n = Mathf.PerlinNoise(tm * 0.85f, seed * 0.37f);
+                float rate = speed * (0.2f + 1.9f * n * n);
+                if (Mathf.PerlinNoise(tm * 0.55f + 17f, seed * 0.21f) < 0.22f && q > 3f) rate = -speed * 0.4f;
+                q = Mathf.Clamp(q + rate * dt, Mathf.Max(0f, most - 4f), Steps - 1);
+                float can = job.Ready >= Steps ? Steps - 1 : job.Ready - 1.001f;
+                q = Mathf.Min(q, Mathf.Max(0f, can));                 // it can't get ahead of the shapes being worked out
+                most = Mathf.Max(most, q);
+                int fi = Mathf.Min(Mathf.FloorToInt(q), Steps - 1);
+                float sub = q - fi;
+                var m = job.MeshAt(fi);
+                if (m != null && fi != shown) { mf.sharedMesh = m; shown = fi; }
+                else if (m == null) sub = 0f;
+                float p = q / (Steps - 1);
+                float mid = Mathf.Sin(Mathf.PI * p);
+                mat.SetFloat("_Sub", sub);
+                mat.SetFloat("_Blend", Mathf.SmoothStep(0f, 1f, (p - 0.1f) / 0.8f));
+                mat.SetFloat("_Writhe", 0.3f + 0.7f * mid);
+                // Its eyes and teeth sink into the flesh as it starts.
+                float keep = 1f - Mathf.SmoothStep(0f, 1f, p / 0.25f);
+                foreach (var kv in sinking) if (kv.Key != null) kv.Key.localScale = kv.Value * keep;
+                // The whole body heaves and swells, slowly.
+                Heave(home, homeRot, clock, 0.35f + 0.65f * mid);
+                float b = 0.35f + 0.65f * mid;
+                shapeGo.transform.localScale = new Vector3(1f + 0.035f * Mathf.Sin(clock * 2.1f) * b, 1f + 0.05f * Mathf.Sin(clock * 1.6f + 1f) * b, 1f + 0.035f * Mathf.Sin(clock * 2.4f + 2f) * b);
+                // Something gives, now and then: wet cracks as it goes forward.
+                if (fi >= lastSound + 5 + rng.Next(4))
                 {
-                    float k = 1f - h / hold;
-                    shapeGo.transform.localScale = Vector3.Lerp(Vector3.one, squash, k);
-                    transform.SetPositionAndRotation(home + Random.insideUnitSphere * 0.02f * k, homeRot * Quaternion.Euler(Random.Range(-3f, 3f) * k, Random.Range(-6f, 6f) * k, Random.Range(-3f, 3f) * k));
-                    yield return null;
+                    lastSound = fi;
+                    Sfx.At(rng.NextDouble() < 0.6 ? "crack" : "creak", home + Vector3.up * 1.2f, 0.5f, 0.55f + (float)rng.NextDouble() * 0.5f);
                 }
+                yield return null;
             }
+            // It settles into what it is now.
+            for (float h = 0f; h < 0.5f; h += Time.deltaTime)
+            {
+                clock += Time.deltaTime;
+                float k = 1f - h / 0.5f;
+                mat.SetFloat("_Writhe", 0.3f * k);
+                Heave(home, homeRot, clock, 0.35f * k);
+                shapeGo.transform.localScale = Vector3.Lerp(Vector3.one, shapeGo.transform.localScale, k);
+                yield return null;
+            }
+            if (GameDirector.I != null) GameDirector.I.Log("monster: transformation shapes took " + job.seconds.ToString("0.0") + " s to work out");
             transform.SetPositionAndRotation(home, homeRot);
             Rebuild(to);
             SetVisible(true);
-            Destroy(shapeGo);
-            foreach (var m in frames) if (m != null) Destroy(m);
             Destroy(next.gameObject);
+
+            // Its new eyes and teeth surface through the skin.
+            var surfacing = new List<KeyValuePair<Transform, Vector3>>();
+            if (rig != null)
+                foreach (var r in rig.GetComponentsInChildren<Renderer>())
+                    if (r.enabled && !(r is SkinnedMeshRenderer)) surfacing.Add(new KeyValuePair<Transform, Vector3>(r.transform, r.transform.localScale));
+            foreach (var kv in surfacing) if (kv.Key != null) kv.Key.localScale = Vector3.zero;
+            shapeGo.transform.localScale = Vector3.one;
+            for (float h = 0f; h < 0.8f; h += Time.deltaTime)
+            {
+                // The last of the shifting flesh breaks up over the finished body as its eyes and teeth come through.
+                mat.SetFloat("_Dissolve", Mathf.Clamp01(h / 0.55f));
+                float k = Mathf.SmoothStep(0f, 1f, h / 0.8f);
+                foreach (var kv in surfacing) if (kv.Key != null) kv.Key.localScale = kv.Value * k;
+                yield return null;
+            }
+            foreach (var kv in surfacing) if (kv.Key != null) kv.Key.localScale = kv.Value;
+            Destroy(shapeGo);
+            job.Free();
+            Destroy(mat);
             Transforming = false;
+        }
+
+        // A slow heave of the whole body: it sways and lists as if its weight keeps shifting. Smooth noise, not a jitter.
+        void Heave(Vector3 home, Quaternion homeRot, float clock, float amount)
+        {
+            float s = seed * 0.73f;
+            Vector3 drift = new Vector3(Mathf.PerlinNoise(clock * 0.9f, s) - 0.5f, (Mathf.PerlinNoise(clock * 1.3f, s + 5f) - 0.5f) * 0.5f, Mathf.PerlinNoise(clock * 0.8f, s + 9f) - 0.5f) * 0.06f * amount;
+            var tilt = Quaternion.Euler((Mathf.PerlinNoise(clock * 1.1f, s + 13f) - 0.5f) * 10f * amount,
+                                        (Mathf.PerlinNoise(clock * 0.7f, s + 17f) - 0.5f) * 16f * amount,
+                                        (Mathf.PerlinNoise(clock * 1.2f, s + 21f) - 0.5f) * 9f * amount);
+            transform.SetPositionAndRotation(home + drift, homeRot * tilt);
+        }
+
+        // Hand a body material's colour, textures and gloss to the Becoming material (sfx "" = old skin, "2" = new).
+        static void Feed(Material src, Material dst, string sfx)
+        {
+            Texture main = src != null && src.HasProperty("_MainTex") ? src.mainTexture : null;
+            dst.SetTexture("_MainTex" + sfx, main != null ? main : Texture2D.whiteTexture);
+            if (src != null && src.HasProperty("_MainTex"))
+            {
+                dst.SetTextureScale("_MainTex" + sfx, src.mainTextureScale);
+                dst.SetTextureOffset("_MainTex" + sfx, src.mainTextureOffset);
+            }
+            Texture bump = src != null && src.HasProperty("_BumpMap") ? src.GetTexture("_BumpMap") : null;
+            dst.SetTexture("_BumpMap" + sfx, bump != null ? bump : Texture2D.normalTexture);
+            dst.SetFloat("_BumpScale" + sfx, bump != null && src.HasProperty("_BumpScale") ? src.GetFloat("_BumpScale") : 1f);
+            dst.SetColor("_Color" + sfx, src != null && src.HasProperty("_Color") ? src.color : Color.gray);
+            dst.SetFloat("_Glossiness" + sfx, src != null && src.HasProperty("_Glossiness") ? src.GetFloat("_Glossiness") : 0.2f);
         }
 
         /// <summary>
@@ -1011,7 +1112,7 @@ namespace NightPages
                 nextDrip = t + Random.Range(0.5f, 1.4f);
                 Sfx.At("drip", transform.position + Vector3.up * 0.1f, 0.4f, 0.9f + Random.value * 0.25f);
             }
-            if (skinG == SShadow)
+            if (skinG == SShadow && !Transforming)                    // (while it changes, the shifting flesh is all there is)
             {
                 // You can never quite hold it in view: the body comes and goes, the eyes stay.
                 bool show = !hiddenAll && (Mathf.PerlinNoise(t * 1.6f, seed) > 0.5f || morphT >= 0f);

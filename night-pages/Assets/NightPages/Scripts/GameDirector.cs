@@ -20,6 +20,10 @@ namespace NightPages
         public int day;
         public float grip = 0.8f;
         public Truth truth;
+        /// <summary>Hardcore: not getting out of a dream sends you back to day one. (Otherwise you dream it again, in a new maze.)</summary>
+        public bool hardcore;
+        /// <summary>How many times this run you didn't get out of a dream.</summary>
+        public int dreamDeaths;
         public int tagFace, tagAway, tagBlame, clues, rewriteSeed;
         public bool cellarOpened;
         public System.Random rng = new System.Random();
@@ -197,8 +201,68 @@ namespace NightPages
             hud.vrBody = "A prototype.\n\nLeft stick to walk, right stick to turn. Point your right hand and pull the trigger to use things.\n" +
                          "The dreams learn what unsettles you, and they remember.\n\n" +
                          "<size=50>Left Y: see what the game is thinking.  Keyboard V: let it listen for gasps.</size>";
-            hud.footer = "[E]  Begin";
+            hardcore = PlayerPrefs.GetInt("np_hardcore", 0) == 1;
+            titleBody = hud.body;
+            ShowHardcore();
             hud.Open(Modal.Title);
+        }
+
+        string titleBody;
+
+        void ShowHardcore()
+        {
+            hud.body = titleBody + "\n\n<size=22>Each night's dream is a maze that changes. Get out before the night runs out.\n" +
+                       (hardcore ? "HARDCORE: if you don't get out, you start again from day one." : "If you don't get out, you dream it again, in a different maze.") + "</size>";
+            hud.footer = "[E]  Begin        [1]  Hardcore: " + (hardcore ? "ON" : "off");
+        }
+
+        /// <summary>A page found in the dream: this run's story, and (the first time) how far the way out is.</summary>
+        public void ReadDreamPage(string text, string hint)
+        {
+            hud.header = "A page";
+            hud.body = text + (hint != null ? "\n\n<i>" + hint + "</i>" : "");
+            hud.footer = "[E] or [Esc] to put it down. The night doesn't wait.";
+            player.frozen = true;
+            hud.Open(Modal.Reading);
+            Sfx.Ui("pageturn", 0.6f);
+            Log("dream: read a page" + (hint != null ? " (" + hint + ")" : " again"));
+        }
+
+        public void RefreshDreamTimer() { if (phase == Phase.Dream) RefreshObjectives(); }
+
+        public void OnDreamDeath(string how) { StartCoroutine(DreamDeath(how)); }
+
+        // You didn't get out. Hardcore: the run is over, back to day one. Otherwise: asleep again, at the start of
+        // the same night's dream, in a maze you haven't seen.
+        IEnumerator DreamDeath(string how)
+        {
+            busy = true;
+            player.frozen = true;
+            dreamDeaths++;
+            yield return FadeOut(2.5f);
+            dream.Clear();
+            Shake(0.06f, "didn't get out of the dream (" + how + ")");
+            hud.ClearSubtitles();
+            if (hardcore)
+            {
+                Log("dream: died in the dream on day " + day + " in hardcore (" + how + "): back to day one");
+                hud.Say("You didn't wake up.", 4f);
+                yield return new WaitForSeconds(4f);
+                busy = false;
+                NewRun();
+                yield break;
+            }
+            Log("dream: died in the dream on day " + day + " (" + how + "): dreaming it again in a new maze (" + dreamDeaths + " so far this run)");
+            hud.Say(how == "it reached you" ? "It had you. Then you were asleep again, somewhere else." : "You didn't get out. You're asleep again, and it isn't the same place.", 4.5f);
+            yield return new WaitForSeconds(1.6f);
+            phase = Phase.Dream;
+            dream.Begin(day);
+            RefreshObjectives();
+            yield return new WaitForSeconds(0.4f);
+            hud.fadeSpeed = 0.5f;
+            hud.fadeTarget = 0f;
+            player.frozen = false;
+            busy = false;
         }
 
         // What the house's own things do when used.
@@ -250,6 +314,7 @@ namespace NightPages
             truth = r < 0.6 ? Truth.Killer : r < 0.8 ? Truth.Keepers : Truth.House;
             grip = 0.8f;
             tagFace = tagAway = tagBlame = clues = cluesSpawned = 0;
+            dreamDeaths = 0;
             cellarOpened = false;
             sawCellarFloor = false;
             rewriteSeed = rng.Next(3);
@@ -317,7 +382,11 @@ namespace NightPages
                 hud.objectives.Add(new KeyValuePair<string, bool>("Go to bed (bedroom)", false));
             }
             else if (phase == Phase.Dream)
-                hud.objectives.Add(new KeyValuePair<string, bool>("Find the way out", false));
+            {
+                int left = Mathf.CeilToInt(dream.TimeLeft);
+                hud.objectives.Add(new KeyValuePair<string, bool>(dream.Maze != null ? "Find the way out before the night ends  (" + (left / 60) + ":" + (left % 60).ToString("00") + ")" : "Find the way out", false));
+                if (dream.Maze != null) hud.objectives.Add(new KeyValuePair<string, bool>("Follow the ticking. Pages buy time.", false));
+            }
         }
 
         public void OnChoreDone()
@@ -612,6 +681,14 @@ namespace NightPages
             switch (hud.modal)
             {
                 case Modal.Title:
+                    if (!busy && In.Down(Btn.One))
+                    {
+                        hardcore = !hardcore;
+                        PlayerPrefs.SetInt("np_hardcore", hardcore ? 1 : 0);
+                        PlayerPrefs.Save();
+                        ShowHardcore();
+                        Sfx.Ui("pageturn", 0.5f);
+                    }
                     if (!busy && In.Down(Btn.Interact)) NewRun();
                     break;
                 case Modal.Ending:

@@ -22,7 +22,11 @@ namespace NightPages
             public Matrix4x4 toLocal;       // rig space -> the primitive's unit space
             public float scale;             // unit-space distance -> metres (smallest axis)
             public Bounds box;              // in rig space, grown by the blend distance
+            public float inflate;           // metres added all round (thin parts, so the grid doesn't break them up)
         }
+
+        /// <summary>Small parts that are never melted into the body (eyes, teeth, mouths...).</summary>
+        public static bool IsDetail(string name) { return Detail.Contains(name); }
 
         static readonly HashSet<string> Detail = new HashSet<string>
         {
@@ -114,7 +118,7 @@ namespace NightPages
                         }
 
             List<Vector3> verts; List<int> tris; Vector3[] normals; Vector2[] uvs;
-            if (!Surface(field, origin, cell, nx, ny, nz, out verts, out tris, out normals, out uvs)) return null;
+            if (!Surface(field, origin, cell, nx, ny, nz, Matrix4x4.identity, out verts, out tris, out normals, out uvs)) return null;
 
             // Skin: each vertex follows the one or two shapes it is closest to.
             var bones = new Transform[prims.Count];
@@ -172,7 +176,7 @@ namespace NightPages
 
         // The surface where the field crosses zero (marching tetrahedra, vertices shared along grid edges), with
         // normals from the field and every triangle wound to face out. No Unity objects: safe off the main thread.
-        static bool Surface(float[] field, Vector3 origin, float cell, int nx, int ny, int nz,
+        static bool Surface(float[] field, Vector3 origin, float cell, int nx, int ny, int nz, Matrix4x4 uvSpace,
                             out List<Vector3> verts, out List<int> tris, out Vector3[] normals, out Vector2[] uvs)
         {
             verts = new List<Vector3>();
@@ -203,7 +207,7 @@ namespace NightPages
             for (int i = 0; i < verts.Count; i++)
             {
                 normals[i] = Gradient(field, verts[i], origin, cell, nx, ny, nz);
-                Vector3 v = verts[i];
+                Vector3 v = uvSpace.MultiplyPoint3x4(verts[i]);         // the body's own space, so the skin lands where it does on the body
                 uvs[i] = new Vector2((float)System.Math.Atan2(v.x, v.z) / (2f * Mathf.PI) * 2f + 0.5f, v.y * 1.4f);
             }
             for (int i = 0; i < tris.Count; i += 3)
@@ -241,8 +245,10 @@ namespace NightPages
                 var t = r.transform;
                 Vector3 ls = t.lossyScale;
                 float smallest = Mathf.Min(Mathf.Abs(ls.x), Mathf.Min(Mathf.Abs(ls.y), Mathf.Abs(ls.z))) / sy;
-                if (smallest < cell * 1.3f) continue;
-                var p = new Prim { bone = null, kind = k, toLocal = t.worldToLocalMatrix * space.localToWorldMatrix, scale = smallest };
+                // Thin parts (spider legs, long fingers) are thinner than the grid: thicken them just enough to come
+                // through whole, or they'd show up as broken dashes while it changes.
+                float inflate = smallest < cell * 1.6f ? Mathf.Max(0f, cell * 0.8f - smallest * 0.25f) : 0f;
+                var p = new Prim { bone = null, kind = k, toLocal = t.worldToLocalMatrix * space.localToWorldMatrix, scale = smallest, inflate = inflate };
                 // Bounds from the primitive's own corners (renderer bounds aren't updated while it's switched off).
                 var corners = new Bounds(spaceFromWorld.MultiplyPoint3x4(t.position), Vector3.zero);
                 for (int c = 0; c < 8; c++)
@@ -251,7 +257,7 @@ namespace NightPages
                     corners.Encapsulate(spaceFromWorld.MultiplyPoint3x4(t.TransformPoint(lc)));
                 }
                 p.box = corners;
-                p.box.Expand(blend * 2.5f + cell * 2f);
+                p.box.Expand(blend * 2.5f + cell * 2f + p.inflate * 2f);
                 prims.Add(p);
             }
             return prims;
@@ -278,88 +284,184 @@ namespace NightPages
             return field;
         }
 
-        /// <summary>The raw shapes of a transformation, computed off the main thread; turn them into meshes with Meshes().</summary>
+        /// <summary>
+        /// The shapes of a transformation, worked out on a worker thread one after another while it plays: poll Ready
+        /// and take each shape with MeshAt(). Every shape also knows where each of its points lies on the next shape
+        /// (in its third UV set), so the Becoming shader can slide the flesh smoothly from one to the next.
+        /// </summary>
         public class Morphing
         {
             public System.Threading.Tasks.Task task;
-            public readonly List<List<Vector3>> verts = new List<List<Vector3>>();
-            public readonly List<List<int>> tris = new List<List<int>>();
-            public readonly List<Vector3[]> normals = new List<Vector3[]>();
-            public readonly List<Vector2[]> uvs = new List<Vector2[]>();
-            public bool Done { get { return task == null || task.IsCompleted; } }
+            public readonly int steps;
+            public Vector3 core;            // where the new body grows out from (in the space it was measured in)
+            public float radius;            // how far from there the bodies reach
+            public float seconds;           // how long the worker took
+            volatile int ready;
+            internal readonly List<Vector3>[] verts;
+            internal readonly List<int>[] tris;
+            internal readonly Vector3[][] normals;
+            internal readonly Vector2[][] uvs;
+            internal readonly List<Vector3>[] next;
+            readonly Mesh[] meshes;
 
-            public List<Mesh> Meshes()
+            public Morphing(int steps)
             {
-                var list = new List<Mesh>();
-                for (int i = 0; i < verts.Count; i++)
-                {
-                    if (verts[i] == null) { list.Add(null); continue; }
-                    var m = new Mesh { name = "Becoming " + i };
-                    if (verts[i].Count > 65000) m.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-                    m.SetVertices(verts[i]);
-                    m.normals = normals[i];
-                    m.uv = uvs[i];
-                    m.SetTriangles(tris[i], 0);
-                    m.RecalculateBounds();
-                    list.Add(m);
-                }
-                return list;
+                this.steps = steps;
+                verts = new List<Vector3>[steps]; tris = new List<int>[steps]; normals = new Vector3[steps][];
+                uvs = new Vector2[steps][]; next = new List<Vector3>[steps]; meshes = new Mesh[steps];
+            }
+
+            /// <summary>How many shapes are finished, from the first.</summary>
+            public int Ready { get { return ready; } internal set { ready = value; } }
+            public bool Done { get { return task == null || task.IsCompleted; } }
+            public bool Failed { get { return task == null || task.IsFaulted || (task.IsCompleted && ready == 0); } }
+
+            /// <summary>Shape i as a mesh (made the first time it's asked for), or null if it isn't ready or is empty.</summary>
+            public Mesh MeshAt(int i)
+            {
+                if (i < 0 || i >= steps || i >= ready || verts[i] == null) return null;
+                if (meshes[i] != null) return meshes[i];
+                var m = new Mesh { name = "Becoming " + i };
+                if (verts[i].Count > 65000) m.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
+                m.SetVertices(verts[i]);
+                m.normals = normals[i];
+                m.uv = uvs[i];
+                m.SetUVs(2, next[i] ?? verts[i]);
+                m.SetTriangles(tris[i], 0);
+                m.RecalculateBounds();
+                var bb = m.bounds;
+                bb.Expand(0.3f);                                         // it writhes and slides past its own bounds
+                m.bounds = bb;
+                m.RecalculateTangents();
+                meshes[i] = m;
+                return m;
+            }
+
+            public void Free()
+            {
+                for (int i = 0; i < meshes.Length; i++) if (meshes[i] != null) { Object.Destroy(meshes[i]); meshes[i] = null; }
             }
         }
 
+        static float SMax(float a, float b, float k) { return -SMin(-a, -b, k); }
+
+        static float Smooth01(float x) { x = Mathf.Clamp01(x); return x * x * (3f - 2f * x); }
+
         /// <summary>
-        /// One body becoming another: both are melted into one field on a shared grid, and the field is blended from the
-        /// first to the second in `steps` stages. Halfway, the flesh boils (it lumps and bulges before it settles into the
-        /// new shape). The heavy work runs on a worker thread; poll Done, then call Meshes().
+        /// One body becoming another, the way a shapeshifter in a film does it: the new body grows OUT of the old one,
+        /// limbs budding from the core and stretching out (not all at once, each in its own time), while the old body's
+        /// limbs draw back into it. For most of the change both are there at once, melted into one thing. The flesh
+        /// heaves with slow lumps that rise and sink and never jump between shapes. Shapes come out in order on a worker
+        /// thread (see Morphing); the first ones are ready almost at once.
         /// </summary>
         public static Morphing Morph(Transform rigA, Transform rigB, Transform space, float cell, float blend, int steps, float seed)
         {
             var a = Gather(rigA, space, cell, blend);
             var b = Gather(rigB, space, cell, blend);
-            var job = new Morphing();
+            var job = new Morphing(steps);
             if (a.Count == 0 || b.Count == 0) return job;
             Bounds all = a[0].box;
             foreach (var p in a) all.Encapsulate(p.box);
             foreach (var p in b) all.Encapsulate(p.box);
             Vector3 origin = all.min;
             int nx = Mathf.CeilToInt(all.size.x / cell) + 1, ny = Mathf.CeilToInt(all.size.y / cell) + 1, nz = Mathf.CeilToInt(all.size.z / cell) + 1;
-            if ((long)nx * ny * nz > 600000)
+            if ((long)nx * ny * nz > 360000)
             {
-                cell *= Mathf.Pow((long)nx * ny * nz / 600000f, 1f / 3f);
+                cell *= Mathf.Pow((long)nx * ny * nz / 360000f, 1f / 3f);
                 nx = Mathf.CeilToInt(all.size.x / cell) + 1; ny = Mathf.CeilToInt(all.size.y / cell) + 1; nz = Mathf.CeilToInt(all.size.z / cell) + 1;
             }
-            for (int s = 0; s < steps; s++) { job.verts.Add(null); job.tris.Add(null); job.normals.Add(null); job.uvs.Add(null); }
+            // The core: the middle of the bodies' mass, weighted toward the big shapes (the torso, not a finger).
+            Vector3 core = Vector3.zero;
+            float wsum = 0f;
+            foreach (var list in new[] { a, b })
+                foreach (var p in list)
+                {
+                    float w = p.box.size.x * p.box.size.y * p.box.size.z;
+                    core += p.box.center * w;
+                    wsum += w;
+                }
+            core = wsum > 0f ? core / wsum : all.center;
+            float R = 0.2f;
+            for (int c = 0; c < 8; c++)
+            {
+                var corner = new Vector3((c & 1) == 0 ? all.min.x : all.max.x, (c & 2) == 0 ? all.min.y : all.max.y, (c & 4) == 0 ? all.min.z : all.max.z);
+                R = Mathf.Max(R, (corner - core).magnitude);
+            }
+            job.core = core;
+            job.radius = R;
+            Matrix4x4 uvSpace = rigA.worldToLocalMatrix * space.localToWorldMatrix;
+            float sd = (seed % 37f) * 0.61f;
             job.task = System.Threading.Tasks.Task.Run(() =>
             {
+                var watch = System.Diagnostics.Stopwatch.StartNew();
                 var fa = Field(a, origin, cell, nx, ny, nz, blend);
                 var fb = Field(b, origin, cell, nx, ny, nz, blend);
                 var f = new float[fa.Length];
-                var rng = new System.Random((int)(seed * 1000f));
+                float far = cell * 6f;
                 for (int s = 0; s < steps; s++)
                 {
                     float t = steps == 1 ? 1f : s / (float)(steps - 1);
-                    float boil = (float)System.Math.Sin(System.Math.PI * t);          // strongest halfway
-                    float ph = (float)rng.NextDouble() * 10f;
+                    // The new body grows out early; the old one only starts to draw back once the new is well under way.
+                    float rNew = Mathf.Lerp(-0.35f * R, 1.4f * R, Smooth01(t / 0.78f));
+                    float rOld = Mathf.Lerp(1.4f * R, -0.35f * R, Smooth01((t - 0.22f) / 0.78f));
+                    float boil = Mathf.Sin(Mathf.PI * t);
+                    float k = blend * (1f + 1.8f * boil);
+                    float ph = t * 4f + sd;                               // lumps drift continuously, never re-rolled
                     for (int z = 0; z < nz; z++)
                         for (int y = 0; y < ny; y++)
                             for (int x = 0; x < nx; x++)
                             {
                                 int i = (z * ny + y) * nx + x;
-                                float v = fa[i] + (fb[i] - fa[i]) * t;
-                                if (boil > 0.01f && v > -cell * 4f && v < cell * 4f)
+                                float va = fa[i], vb = fb[i];
+                                if (s == 0) { f[i] = va; continue; }
+                                if (s == steps - 1) { f[i] = vb; continue; }
+                                if (va > far && vb > far) { f[i] = Mathf.Min(va, vb); continue; }
+                                float px = origin.x + x * cell, py = origin.y + y * cell, pz = origin.z + z * cell;
+                                float dx = px - core.x, dy = py - core.y, dz = pz - core.z;
+                                float d = Mathf.Sqrt(dx * dx + dy * dy + dz * dz);
+                                float inv = 1f / Mathf.Max(d, 0.0001f);
+                                float ux = dx * inv, uy = dy * inv, uz = dz * inv;
+                                // Each direction grows (and withdraws) at its own pace, so limbs come out one by one.
+                                float jit = R * 0.22f * (Mathf.Sin(ux * 3.1f + sd) * Mathf.Sin(uy * 2.3f + 1.7f) + 0.6f * Mathf.Sin(uz * 2.7f - sd * 0.5f));
+                                float oldF = SMax(va, d + jit - rOld, 0.08f);
+                                float newF = SMax(vb, d - jit - rNew, 0.08f);
+                                float v = SMin(oldF, newF, k);
+                                if (v > -cell * 5f && v < cell * 5f)
                                 {
-                                    float px = origin.x + x * cell, py = origin.y + y * cell, pz = origin.z + z * cell;
-                                    float n = (float)(System.Math.Sin(px * 23f + ph) * System.Math.Sin(py * 19f - ph * 0.7f) * System.Math.Sin(pz * 21f + ph * 1.3f));
-                                    v -= n * 0.045f * boil;                                      // lumps that rise and sink
+                                    float lump = Mathf.Sin(px * 8.5f + ph) * Mathf.Sin(py * 7.3f - ph * 0.8f) * Mathf.Sin(pz * 9.1f + ph * 1.2f);
+                                    v -= lump * 0.032f * boil;
                                 }
                                 f[i] = v;
                             }
                     List<Vector3> vs; List<int> ts; Vector3[] ns; Vector2[] us;
-                    if (Surface(f, origin, cell, nx, ny, nz, out vs, out ts, out ns, out us))
+                    bool any = Surface(f, origin, cell, nx, ny, nz, uvSpace, out vs, out ts, out ns, out us);
+                    // Where the last shape's flesh lies on this one: it slides there instead of jumping.
+                    if (s > 0 && job.verts[s - 1] != null)
                     {
-                        job.verts[s] = vs; job.tris[s] = ts; job.normals[s] = ns; job.uvs[s] = us;
+                        var prev = job.verts[s - 1];
+                        var to = new List<Vector3>(prev.Count);
+                        float limit = cell * 4f + R * 1.8f / steps;
+                        foreach (var p0 in prev)
+                        {
+                            Vector3 q = p0;
+                            if (any)
+                                for (int it = 0; it < 3; it++)
+                                {
+                                    float val = Sample(f, q, origin, cell, nx, ny, nz);
+                                    if (Mathf.Abs(val) < cell * 0.05f) break;
+                                    q -= Gradient(f, q, origin, cell, nx, ny, nz) * val;
+                                }
+                            Vector3 move = q - p0;
+                            if (move.magnitude > limit) move = move.normalized * limit;
+                            to.Add(p0 + move);
+                        }
+                        job.next[s - 1] = to;
                     }
+                    if (any) { job.verts[s] = vs; job.tris[s] = ts; job.normals[s] = ns; job.uvs[s] = us; }
+                    job.Ready = s;                                    // shapes before this one are complete, with where they go next
                 }
+                job.Ready = steps;
+                job.seconds = (float)watch.Elapsed.TotalSeconds;
             });
             return job;
         }
@@ -400,7 +502,7 @@ namespace NightPages
                     break;
                 }
             }
-            return d * p.scale;
+            return d * p.scale - p.inflate;
         }
 
         static Vector3 Gradient(float[] f, Vector3 p, Vector3 origin, float cell, int nx, int ny, int nz)
