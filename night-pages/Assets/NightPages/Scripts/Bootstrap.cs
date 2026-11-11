@@ -18,6 +18,8 @@ namespace NightPages
             Sfx.ResetStatics();
             Build.ResetStatics();
             Monster.ResetStatics();
+            WallHands.ResetStatics();
+            DreamMaze.ResetStatics();
             Look.ResetStatics();
             FaceReader.ResetStatics();
             Mirror.ResetStatics();

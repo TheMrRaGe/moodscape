@@ -153,8 +153,12 @@ namespace NightPages
         /// <summary>A fixed piece of furniture: the model if it's installed, otherwise a box of the same size.</summary>
         GameObject Furn(string model, string name, Vector3 pos, Vector3 size, Color c, float yaw = 0f)
         {
+            string asked = model;
+            model = Catalogue.Swap(model);
+            // A swapped piece is held to the footprint the room was planned for (the original may overhang a little).
+            float fit = model != asked ? 1.0f : 1.25f;
             GameObject hit, made;
-            if (model != null && Models.Place(model, transform, P(Floor(pos, size)), ModelSizes.Height(model, size.y), Yaw(yaw), out hit, true, Mathf.Max(size.x, size.z) * 1.25f) != null)
+            if (model != null && Models.Place(model, transform, P(Floor(pos, size)), ModelSizes.Height(model, size.y), Yaw(yaw), out hit, true, Mathf.Max(size.x, size.z) * fit) != null)
             {
                 hit.name = name;
                 made = hit;
@@ -167,6 +171,9 @@ namespace NightPages
         /// <summary>Something that can be picked up and moved.</summary>
         Movable Loose(string model, string name, Vector3 floorPoint, float height, Vector3 fallbackSize, Color c, float yaw, float mass)
         {
+            string asked = model;
+            model = Catalogue.Swap(model);
+            if (model != asked && model != null) height = ModelSizes.Height(model, height);
             Vector3 at = P(floorPoint);
             yaw = Yaw(yaw);
             Movable m = model == null ? null : ModelsLoose.Place(model, transform, at, ModelSizes.Height(model, height), yaw, mass, Mathf.Max(fallbackSize.x, fallbackSize.z) * 1.3f);
@@ -391,14 +398,42 @@ namespace NightPages
 
         // ---------------------------------------------------------------- the build
 
+        // This run's floor and wallpaper (see PickSurfaces).
+        string floorTex = "old_wood_floor", wallpaperTex;
+        Color paperTint;
+
+        static readonly string[] FloorChoices = { "old_wood_floor", "dark_wooden_planks", "diagonal_parquet", "plank_flooring", "plank_flooring_02", "brown_planks_05" };
+        static readonly string[] PaperChoices = { "Wallpaper001A", "Wallpaper001B", "Wallpaper001C", "Wallpaper002A", "Wallpaper002B", "Wallpaper002C" };
+
+        void PickSurfaces()
+        {
+            var options = new List<string>();
+            foreach (var f in FloorChoices) if (Tex.Has(f)) options.Add(f);
+            floorTex = options.Count > 0 ? options[Catalogue.Next(options.Count)] : "old_wood_floor";
+            options.Clear();
+            foreach (var w in PaperChoices) if (Tex.Has(w)) options.Add(w);
+            // Now and then the old generated paper; mostly one of the real ones, aged a different amount each time.
+            wallpaperTex = options.Count > 0 && Catalogue.Roll() < 0.8 ? options[Catalogue.Next(options.Count)] : null;
+            float age = (float)Catalogue.Roll();
+            paperTint = Color.Lerp(new Color(0.92f, 0.88f, 0.8f), new Color(0.7f, 0.64f, 0.55f), age);
+        }
+
+        Material Paper(float u, float v)
+        {
+            if (wallpaperTex != null) return Tex.Real(wallpaperTex, u, v, 1.0f, paperTint, Tex.Wallpaper, 0.08f, 0.6f);
+            return Tex.Mat(Tex.Wallpaper, u, v, 1.2f, AgedPaper);
+        }
+
         public void BuildAll(Material paintingMat)
         {
             paintMat = paintingMat;
+            Catalogue.NewRun(Random.Range(1, int.MaxValue));
+            PickSurfaces();
             ChooseLayout();
             Plain();
             var t = transform;
             // Floors: old boards in the rooms, worn boards in the hall. Real photo textures. (The kitchen tiles go with the kitchen.)
-            Build.Box("Floor", t, new Vector3(0f, -0.1f, 0f), new Vector3(15.4f, 0.2f, 16.4f), Tex.Real("old_wood_floor", 15.4f, 16.4f, 2.2f, new Color(0.85f, 0.78f, 0.72f), Tex.Boards, 0.25f));
+            Build.Box("Floor", t, new Vector3(0f, -0.1f, 0f), new Vector3(15.4f, 0.2f, 16.4f), Tex.Real(floorTex, 15.4f, 16.4f, 2.2f, new Color(0.85f, 0.78f, 0.72f), Tex.Boards, 0.25f));
             Build.Box("Hall floor", t, new Vector3(0f, 0.002f, 0f), new Vector3(2.9f, 0.004f, 15.9f), Tex.Real("wood_floor_worn", 2.9f, 15.9f, 2.2f, new Color(0.8f, 0.72f, 0.65f), Tex.Boards, 0.25f), false);
             Build.Box("Ceiling", t, new Vector3(0f, H + 0.1f, 0f), new Vector3(15.4f, 0.2f, 16.4f), Tex.Real("white_plaster_rough_01", 15.4f, 16.4f, 2.5f, new Color(0.95f, 0.92f, 0.86f), Tex.Plaster));
 
@@ -423,13 +458,62 @@ namespace NightPages
             BuildBedroom();
             Plain();
             BuildCellar();
+            Scatter();
             BuildNav();
 
             SetTime(0, 1);
             settleAt = Time.time + 2.5f;
+            GameDirector.I.Log("house: this run's things: " + Catalogue.Swapped + " pieces of furniture swapped for others, floor '" + floorTex + "', wallpaper '" + (wallpaperTex ?? "generated") + "', " + scattered + " small things scattered");
             GameDirector.I.Log("house: layout " + Layout + " of 24 (" + LayoutDescription + "); " + Models.Installed + " downloaded models in use, " +
                                Models.Missing + " missing (boxes used instead), " + movables.Count + " things you can move");
             foreach (var problem in CheckLayout()) GameDirector.I.Log("house: LAYOUT PROBLEM: " + problem);
+        }
+
+        int scattered;
+
+        // Small things on top of the furniture: different on every run. Each table, cabinet and shelf with a free
+        // top gets none to three of them, from what belongs in that room.
+        void Scatter()
+        {
+            scattered = 0;
+            var tops = new List<Bounds>();
+            foreach (var f in furniture)
+            {
+                if (f == null) continue;
+                var col = f.GetComponent<Collider>();
+                if (col == null) continue;
+                Bounds b = col.bounds;
+                string n = f.name.ToLowerInvariant();
+                if (n.Contains("bed") || n.Contains("clock") || n.Contains("stove") || n.Contains("heater") || n.Contains("sofa") || n.Contains("chair") || n.Contains("wardrobe") || n.Contains("fridge")) continue;
+                float top = b.max.y - transform.position.y;
+                if (top < 0.4f || top > 1.35f || b.size.x * b.size.z < 0.12f) continue;
+                tops.Add(b);
+            }
+            foreach (var b in tops)
+            {
+                int count = Catalogue.Next(4);
+                var inRoom = RoomAt(b.center);
+                string room = inRoom != null ? inRoom.name : "hall";
+                for (int i = 0; i < count; i++)
+                {
+                    string role = room == "kitchen" ? (Catalogue.Roll() < 0.5 ? Catalogue.Kitchen : Catalogue.Food)
+                                : Catalogue.Roll() < 0.35 ? Catalogue.Vase : Catalogue.Roll() < 0.6 ? Catalogue.Decor : Catalogue.Lamp;
+                    string id = Catalogue.Any(role);
+                    if (id == null) continue;
+                    Vector3 s = Catalogue.SizeOf(id);
+                    if (s.x > b.size.x * 0.6f || s.z > b.size.z * 0.6f || s.y > 0.6f) continue;
+                    // Somewhere on the top, clear of the edges; checked against what's already there.
+                    Vector3 at = new Vector3(b.center.x + ((float)Catalogue.Roll() - 0.5f) * (b.size.x - s.x - 0.08f),
+                                             b.max.y + 0.005f, b.center.z + ((float)Catalogue.Roll() - 0.5f) * (b.size.z - s.z - 0.08f));
+                    if (Physics.CheckBox(at + Vector3.up * (s.y / 2f + 0.01f), new Vector3(s.x, s.y, s.z) * 0.45f, Quaternion.identity, ~0, QueryTriggerInteraction.Ignore)) continue;
+                    var m = ModelsLoose.Place(id, transform, transform.InverseTransformPoint(at), s.y, (float)Catalogue.Roll() * 360f, 0.5f, Mathf.Max(s.x, s.z) * 1.2f);
+                    if (m == null) continue;
+                    m.gameObject.name = id.Replace('_', ' ');
+                    movables.Add(m);
+                    foreach (var piece in ModelsLoose.LastPieces) movables.Add(piece);
+                    scattered++;
+                }
+            }
         }
 
         void BuildHall()
@@ -827,7 +911,7 @@ namespace NightPages
                 r.door = Door.Create(transform, hinge, into, name, new Color(0.8f, 0.76f, 0.66f), baseYaw);
                 doors.Add(r.door);
                 r.seal = Build.Box("Seal " + name, transform, new Vector3(x, DoorH / 2f, z), new Vector3(T + 0.04f, DoorH, Gap),
-                    Tex.Mat(Tex.Wallpaper, Gap, DoorH, 1.2f, AgedPaper));
+                    Paper(Gap, DoorH));
                 r.seal.SetActive(false);
                 // The door frame.
                 Build.Box("Frame", transform, new Vector3(x, DoorH / 2f, z - Gap / 2f - 0.03f), new Vector3(T + 0.06f, DoorH, 0.06f), Cream, false);
@@ -874,8 +958,8 @@ namespace NightPages
         {
             if (size.x <= 0.01f || size.z <= 0.01f) return;
             float len = Mathf.Max(size.x, size.z);
-            var paper = Tex.Mat(Tex.Wallpaper, len, size.y, 1.2f, AgedPaper);
-            if (Tex.Has("white_plaster_rough_01"))
+            var paper = Paper(len, size.y);
+            if (wallpaperTex == null && Tex.Has("white_plaster_rough_01"))
             {
                 var bump = Tex.Real("white_plaster_rough_01", len, size.y, 2.5f, Color.white);
                 Tex.Bump(paper, (Texture2D)bump.GetTexture("_BumpMap"), bump.GetTextureScale("_BumpMap"), 0.35f);

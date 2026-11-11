@@ -37,13 +37,31 @@ Television_01 ornate_mirror_01 fancy_picture_frame_02 side_table_tall_01 potted_
 cassette_player vintage_day_bed ceramic_vase_03 rubber_duck_toy vintage_crutches_01
 wheelchair_01 filmstrip_projector_8mm binder_notebook vintage_stapler cigarette_pack small_wooden_table_01
 marble_bust_01 carved_wooden_plate brass_vase_01
+# (added for variety: more of an old house, and things a dream would put in one)
+GothicBed_01 GothicCabinet_01 GothicCommode_01 GreenChair_01 Shelf_01 Sofa_01 WoodenTable_02 WoodenTable_03
+Chandelier_01 Chandelier_03 Lantern_01 brass_goblets brass_pan_01 brass_pot_02 brass_vase_02 brass_vase_03
+bull_head horse_head lion_head ceramic_vase_04 chinese_armchair chinese_cabinet chinese_screen_panels chinese_stool
+chinese_tea_table coffee_table_round_01 dartboard desk_lamp_arm_01 fancy_picture_frame_01 folding_wooden_stool
+gallinera_chair gallinera_table gothic_coffee_table lantern_chandelier_01 lightbulb_01 metal_jug painted_wooden_cabinet
+painted_wooden_chair_02 painted_wooden_nightstand painted_wooden_sofa painted_wooden_table planter_pot_clay
+round_wooden_table_01 scandinavian_masonry_heater sofa_02 standing_chalkboard_01 wooden_display_shelves_01
+wooden_stool_01 wooden_stool_02 wooden_table_02 carrot_cake croissant CheeseBox_01 food_pears_asian_01
+food_pomegranate_01 can_rusted all_purpose_cleaner bleach_bottle multi_cleaner_bottle Camera_01 Ukulele_01
+vintage_video_camera horse_statue_01 metal_tool_chest steel_frame_shelves_02 barrel_03 Barrel_01 BarberShopChair_01
+SchoolChair_01 SchoolDesk_01 ceiling_fan mid_century_lounge_chair WetFloorSign_01 plastic_bottle_gallon
+russian_food_cans_01 seeding_tray_01 cleaner_tin_01
 """.split()
 
 TEXTURES = """
 weathered_plank_siding grey_roof_01 dark_brick_wall wood_floor_deck old_wood_floor wood_floor_worn
 white_plaster_rough_01 floor_tiles_06 forest_leaves_02 leafy_grass stony_dirt_path brown_mud_leaves_01
 pine_bark mossy_rock dirty_carpet rough_pine_door concrete_floor_worn_001
+dark_wooden_planks diagonal_parquet laminate_floor_02 plank_flooring plank_flooring_02 marble_01 floor_tiles_02
+floor_tiles_08 plastered_wall_04 grey_plaster_03 painted_concrete dark_wood brown_planks_05 castle_brick_02_white
+beige_wall_001 broken_wall
 """.split()
+# Wallpapers from ambientCG (ambientcg.com, also CC0): colour and normal map, saved like the Poly Haven textures.
+AMBIENTCG = "Wallpaper001A Wallpaper001B Wallpaper001C Wallpaper002A Wallpaper002B Wallpaper002C".split()
 
 
 def get(url):
@@ -82,10 +100,40 @@ def texture(tid):
     return n
 
 
+def ambientcg(aid):
+    import io, zipfile
+    out = ROOT / "NPTex" / aid
+    if (out / f"{aid}_diff.jpg").is_file() and (out / f"{aid}_nor_gl.jpg").is_file():
+        return 0
+    data = get(f"https://ambientcg.com/get?file={aid}_1K-JPG.zip")
+    z = zipfile.ZipFile(io.BytesIO(data))
+    out.mkdir(parents=True, exist_ok=True)
+    for name in z.namelist():
+        if name.endswith("_Color.jpg"):
+            (out / f"{aid}_diff.jpg").write_bytes(z.read(name))
+        elif name.endswith("_NormalGL.jpg"):
+            (out / f"{aid}_nor_gl.jpg").write_bytes(z.read(name))
+    return len(data)
+
+
+def sizes_cs():
+    """The real sizes of every model, for Scripts/ModelSizes.cs (width, height, depth in metres)."""
+    info = json.loads(get("https://api.polyhaven.com/assets?t=models"))
+    lines = []
+    for mid in MODELS:
+        d = info.get(mid, {}).get("dimensions")
+        if d:
+            lines.append(f'            {{ "{mid}", new Vector3({d[0] / 1000:.3f}f, {d[2] / 1000:.3f}f, {d[1] / 1000:.3f}f) }},')
+    return "\n".join(lines)
+
+
 def main():
     want = set(sys.argv[1:])
     total, failed = 0, []
-    for kind, ids, fn in (("model", MODELS, model), ("texture", TEXTURES, texture)):
+    if want == {"--sizes"}:
+        print(sizes_cs())
+        return
+    for kind, ids, fn in (("model", MODELS, model), ("texture", TEXTURES, texture), ("texture", AMBIENTCG, ambientcg)):
         for i in ids:
             if want and i not in want:
                 continue

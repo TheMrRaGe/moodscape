@@ -713,6 +713,7 @@ namespace NightPages
             if (In.Down(Btn.SkipAhead) && !busy) SkipAhead();
 
             Reactions.Tick(link, player);
+            WallHands.Tick(this);
             hud.grip = phase == Phase.Title || phase == Phase.Ending ? 1f : grip;
             // What the storyteller is told: how well you're holding up, and how late in the day it is.
             teller.Standing = grip;

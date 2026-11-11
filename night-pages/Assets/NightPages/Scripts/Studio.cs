@@ -80,6 +80,27 @@ namespace NightPages
             AimCamera(from, StudioAt + Vector3.up * lookY);
         }
 
+        // It walks a circle round the turntable (at `speed` m/s), then back to the middle; the camera stands and watches.
+        IEnumerator StudioWalk(Monster it, float speed)
+        {
+            Log("studio: walking at " + speed.ToString("0.0") + " m/s, from frame " + filmFrames);
+            const float R = 1.7f;
+            float a = 0f;
+            AimCamera(StudioAt + new Vector3(0f, 0.02f, -4.4f), StudioAt + Vector3.up * 0.9f);
+            for (float t = 0f; t < 2f * Mathf.PI * R / speed; t += Time.deltaTime)
+            {
+                a += speed / R * Time.deltaTime;
+                Vector3 p = StudioAt + new Vector3(Mathf.Sin(a) * R, 0f, -Mathf.Cos(a) * R + 0.3f);
+                Vector3 dir = new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a));
+                it.transform.SetPositionAndRotation(p, Quaternion.LookRotation(dir));
+                Frame();
+                yield return null;
+            }
+            for (float t = 0f; t < 1f; t += Time.deltaTime) { Frame(); yield return null; }
+            it.transform.SetPositionAndRotation(StudioAt, Quaternion.identity);
+            yield return null;
+        }
+
         IEnumerator StudioFilm(StringBuilder summary)
         {
             yield return StartRunForTest();
@@ -112,6 +133,7 @@ namespace NightPages
             // Form 1, all the way round.
             for (float t = 0f; t < 6f; t += Time.deltaTime) { angle += 60f * Time.deltaTime; Orbit(angle, 3.4f, 1.0f, 0.1f); Frame(); yield return null; }
             Orbit(0f, 3.4f, 1.0f, 0.1f); yield return null; Shot("studio form 1");
+            yield return StudioWalk(it, 1.2f);
 
             for (int k = 1; k < looks.Length; k++)
             {
@@ -128,6 +150,7 @@ namespace NightPages
                 }
                 for (float t = 0f; t < 3f; t += Time.deltaTime) { angle += 40f * Time.deltaTime; Orbit(angle, 3.2f, 0.9f, 0.1f); Frame(); yield return null; }
                 Orbit(0f, 3.2f, 0.9f, 0.1f); yield return null; Shot("studio form " + (k + 1));
+                yield return StudioWalk(it, 1.2f + 0.5f * k);
             }
 
             // Close: back to the first form, the camera near its head the whole time.
@@ -146,14 +169,13 @@ namespace NightPages
             Destroy(it.gameObject);
 
             // The house's furniture, one at a time on the turntable.
-            var models = new List<KeyValuePair<string, float>>
-            {
-                new KeyValuePair<string, float>("vintage_grandfather_clock_01", 2.1f), new KeyValuePair<string, float>("ClassicConsole_01", 0.9f),
-                new KeyValuePair<string, float>("dining_chair_02", 0.95f), new KeyValuePair<string, float>("round_wooden_table_02", 0.75f),
-                new KeyValuePair<string, float>("drawer_cabinet", 1.9f), new KeyValuePair<string, float>("vintage_wooden_drawer_01", 0.9f),
-                new KeyValuePair<string, float>("WoodenTable_01", 0.8f), new KeyValuePair<string, float>("potted_plant_02", 0.9f),
-                new KeyValuePair<string, float>("metal_trash_can", 0.7f),
-            };
+            // A sample of the furniture and things the house and the dream draw on, a few of each kind.
+            var models = new List<KeyValuePair<string, float>>();
+            foreach (var id in new[] { "GothicBed_01", "GothicCabinet_01", "GothicCommode_01", "chinese_cabinet", "painted_wooden_sofa", "Sofa_01",
+                                       "mid_century_lounge_chair", "chinese_armchair", "gallinera_chair", "painted_wooden_chair_02", "BarberShopChair_01",
+                                       "gothic_coffee_table", "painted_wooden_table", "SchoolDesk_01", "wooden_display_shelves_01", "scandinavian_masonry_heater",
+                                       "Chandelier_01", "bull_head", "lion_head", "brass_goblets", "horse_statue_01", "carrot_cake", "metal_tool_chest", "standing_chalkboard_01" })
+                models.Add(new KeyValuePair<string, float>(id, Mathf.Min(2.3f, ModelSizes.Height(id, 0.9f))));
             int shown = 0;
             foreach (var kv in models)
             {
@@ -162,9 +184,9 @@ namespace NightPages
                 if (go == null) { Log("studio: model " + kv.Key + " isn't installed"); continue; }
                 shown++;
                 float look = kv.Value * 0.5f, dist = Mathf.Max(2.2f, kv.Value * 1.7f);
-                for (float t = 0f; t < 3f; t += Time.deltaTime)
+                for (float t = 0f; t < 2.4f; t += Time.deltaTime)
                 {
-                    go.transform.localRotation = Quaternion.Euler(0f, t * 120f, 0f);
+                    go.transform.localRotation = Quaternion.Euler(0f, t * 150f, 0f);
                     Orbit(20f, dist, look, 0f);
                     Frame();
                     yield return null;

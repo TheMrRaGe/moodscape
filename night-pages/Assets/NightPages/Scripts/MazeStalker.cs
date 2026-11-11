@@ -24,13 +24,16 @@ namespace NightPages
         public DreamMaze.HideSpot Hidden { get; private set; }
         public int waves, timesHidden, timesSeen, toyed;
         public System.Action<string> onCatch;
+        /// <summary>For demos and tests: what it looks like next wave (otherwise the fear engine's choice).</summary>
+        public int[] forceLook;
 
         readonly GameDirector g;
         readonly DreamMaze maze;
         readonly Transform dyn;
         readonly int day;
         readonly float floorY;
-        float until, huntEnds, knowsUntil, lastSeenAt = -99f, hidAt, stepAt, waitUntil, breathAt;
+        float until, huntEnds, knowsUntil, lastSeenAt = -99f, hidAt, stepAt, waitUntil, breathAt, nextChange;
+        public int changes;
         Vector3 lastKnown, goal;
         bool sawEnter, saidHide, saidOut, wasSeeing;
         readonly List<DreamMaze.HideSpot> toCheck = new List<DreamMaze.HideSpot>();
@@ -46,7 +49,19 @@ namespace NightPages
             until = Time.time + 22f;                     // the first wave never comes at once
         }
 
-        Vector3 Pos { get { return It.transform.position; } }
+        // Where it is, on the floor plan. (When it's up a wall or across the ceiling, this is the spot on the floor
+        // under it, and the body is drawn up there; see Surfaces.)
+        Vector3 Pos { get { return surf == 0 ? It.transform.position : virt; } }
+
+        // Crawling things don't keep to the floor. 0 on the floor, 1 going to a wall, 2 climbing it, 3 on the ceiling, 4 dropping.
+        int surf;
+        Vector3 virt, wallSpot, wallNormal, heading = Vector3.forward;
+        float climbY, fallV, ceilingSince, nextClimb;
+        public int climbs, drops;
+        public bool OffTheFloor { get { return surf >= 2; } }
+
+        /// <summary>It changes the next chance it gets (for demos and tests).</summary>
+        public void ForceChange() { nextChange = 0f; }
 
         /// <summary>The next wave starts now (for demos and tests).</summary>
         public void ForceWave() { if (state == State.Calm) until = Time.time; }
@@ -126,6 +141,22 @@ namespace NightPages
         float Move(Vector3 target, float speed, float dt)
         {
             if (It.Transforming) return (target - Pos).magnitude;          // it stops to become something else
+            if (It.Crawler && surf == 0 && state != State.Toy && state != State.Found && Time.time > nextClimb)
+            {
+                nextClimb = Time.time + 1.5f;
+                // Somewhere to go a fair way off in this room: up the wall and over, sometimes.
+                if (Vis.Level(target - Pos).magnitude > 4f && maze.SameRoom(Pos, target) == false && Random.value < 0.75f && maze.ClimbSpot(Pos, out wallSpot, out wallNormal))
+                {
+                    surf = 1; virt = It.transform.position;
+                    g.Log("dream maze: it is going up the wall");
+                }
+                else if (Vis.Level(target - Pos).magnitude > 4f && Random.value < 0.4f && maze.ClimbSpot(Pos, out wallSpot, out wallNormal))
+                {
+                    surf = 1; virt = It.transform.position;
+                    g.Log("dream maze: it is going up the wall");
+                }
+            }
+            if (surf > 0) return Crawl(target, speed, dt);
             Vector3 next = maze.GuideTo(Pos, target);
             Vector3 d = Vis.Level(next - Pos);
             float step = Mathf.Min(speed * dt, d.magnitude);
@@ -144,8 +175,79 @@ namespace NightPages
             return Vis.Level(target - Pos).magnitude;
         }
 
+        // Up the wall, across the ceiling, and down again (dropping, if it's over you).
+        float Crawl(Vector3 target, float speed, float dt)
+        {
+            float floorY = maze.FloorY, ceil = maze.CeilingOver(virt);
+            Transform tr = It.transform;
+            switch (surf)
+            {
+                case 1:     // to the foot of the wall
+                {
+                    Vector3 d = Vis.Level(wallSpot - virt);
+                    if (d.magnitude < 0.25f || ceil <= 0f) { surf = ceil > 0f ? 2 : 0; climbY = 0f; climbs++; break; }
+                    virt += d.normalized * Mathf.Min(speed * dt, d.magnitude);
+                    tr.position = new Vector3(virt.x, floorY, virt.z);
+                    tr.rotation = Quaternion.Slerp(tr.rotation, Quaternion.LookRotation(-wallNormal), dt * 8f);
+                    break;
+                }
+                case 2:     // straight up it, head first, its back to the room
+                    if (ceil <= 0f) { surf = 4; fallV = 0f; break; }
+                    climbY += speed * 0.9f * dt;
+                    tr.position = new Vector3(wallSpot.x, floorY + climbY, wallSpot.z) - wallNormal * 0.05f;
+                    tr.rotation = Quaternion.Slerp(tr.rotation, Quaternion.LookRotation(Vector3.up, wallNormal), dt * 9f);
+                    if (Time.time > stepAt) { stepAt = Time.time + 0.35f; Sfx.At("scratch", tr.position, 0.55f, 1.3f); }
+                    if (climbY >= ceil - 0.25f) { surf = 3; ceilingSince = Time.time; virt = wallSpot + wallNormal * 0.5f; heading = wallNormal; }
+                    break;
+                case 3:     // upside down across the ceiling
+                {
+                    if (ceil <= 0f) { surf = 4; fallV = 0f; break; }
+                    Vector3 next = maze.GuideTo(virt, target);
+                    Vector3 d = Vis.Level(next - virt);
+                    bool toDoor = (next - target).sqrMagnitude > 0.01f && d.magnitude < 2.2f;        // a doorway's next: it can't go through on the ceiling
+                    bool overYou = state == State.Hunt && Vis.Level(target - virt).magnitude < 1.6f;
+                    bool mustLand = state == State.Toy || state == State.Found || Time.time - ceilingSince > 14f;
+                    if (toDoor || overYou || mustLand)
+                    {
+                        surf = 4; fallV = 0f; drops++;
+                        g.Log("dream maze: it drops from the ceiling" + (overYou ? ", right in front of you" : ""));
+                        break;
+                    }
+                    if (d.sqrMagnitude > 1e-6f)
+                    {
+                        heading = Vector3.Slerp(heading, d.normalized, dt * 6f);
+                        virt += d.normalized * Mathf.Min(speed * 1.1f * dt, d.magnitude);
+                    }
+                    tr.position = new Vector3(virt.x, floorY + ceil, virt.z);
+                    tr.rotation = Quaternion.Slerp(tr.rotation, Quaternion.LookRotation(heading, Vector3.down), dt * 8f);
+                    if (Time.time > stepAt) { stepAt = Time.time + 0.3f; Sfx.At("scratch", tr.position, 0.6f, 1.2f); }
+                    break;
+                }
+                case 4:     // falling, turning over as it comes
+                {
+                    fallV += 9.8f * dt;
+                    Vector3 p = tr.position;
+                    p.y -= fallV * dt;
+                    tr.rotation = Quaternion.Slerp(tr.rotation, Quaternion.LookRotation(heading, Vector3.up), dt * 10f);
+                    if (p.y <= floorY)
+                    {
+                        p.y = floorY;
+                        surf = 0;
+                        tr.rotation = Quaternion.LookRotation(heading, Vector3.up);
+                        nextClimb = Time.time + Random.Range(6f, 12f);
+                        Sfx.At("slam", p, 1f, 0.45f);
+                        if (Vis.Level(g.player.transform.position - p).magnitude < 5f) { Look.Kick(0.6f); g.Shake(0.02f, "it dropped from the ceiling near you"); }
+                    }
+                    tr.position = p;
+                    break;
+                }
+            }
+            return Vis.Level(target - Pos).magnitude;
+        }
+
         void Face(Vector3 at, float dt)
         {
+            if (It.Transforming || surf != 0) return;
             Vector3 d = Vis.Level(at - Pos);
             if (d.sqrMagnitude > 1e-4f) It.transform.rotation = Quaternion.Slerp(It.transform.rotation, Quaternion.LookRotation(d.normalized), dt * 5f);
         }
@@ -180,11 +282,15 @@ namespace NightPages
             {
                 if (now < until) return;
                 waves++;
-                It = Monster.Create(dyn, g.fear.Look());
+                It = Monster.Create(dyn, forceLook ?? g.fear.Look());
+                forceLook = null;
                 Vector3 at = maze.FarUnseen(pp, 3, cam);
                 at.y = floorY;
                 It.transform.position = at;
                 It.FaceToward(pp);
+                surf = 0;
+                nextClimb = now + Random.Range(0.5f, 2f);
+                g.Log("dream maze: this one " + (It.Crawler ? "crawls: it can take the walls and the ceiling" : "walks"));
                 // A little light of its own, low and red: in a dark room you see that it's there before you see what it is.
                 var glow = new GameObject("Its light").AddComponent<Light>();
                 glow.transform.SetParent(It.transform, false);
@@ -195,10 +301,29 @@ namespace NightPages
                 lastKnown = pp;
                 lastSeenAt = -99f;
                 state = State.Hunt;
+                nextChange = now + Random.Range(6f, 12f);
                 g.Log("dream maze: wave " + waves + ": it is in the maze, " + maze.Rooms(at, pp) + " rooms away, for " + (huntEnds - now).ToString("0") + " s");
                 return;
             }
             if (It == null) { state = State.Calm; until = now + 10f; return; }
+
+            // It doesn't stay one thing. Now and then it stops, and becomes something else, where it stands: more
+            // often when it knows you're watching it (in sight, or outside your hiding place).
+            if (now > nextChange && !It.Transforming && state != State.Leave)
+            {
+                bool watched = Vis.Sees(cam, It.HeadPos, It.transform) || Vis.Sees(cam, Pos + Vector3.up * 0.7f, It.transform);
+                bool atYou = state == State.Toy && checking != null && checking == Hidden && waitUntil > 0f;
+                if (watched || atYou || Random.value < 0.35f)
+                {
+                    var next = g.fear.Compose(2);
+                    next[Monster.Shift] = 0;
+                    changes++;
+                    g.Log("dream maze: it is becoming something else" + (watched ? ", where you can see it" : "") + (atYou ? ", outside your hiding place" : "") + ": " + g.fear.DescribeLook(next));
+                    g.StartCoroutine(It.TransformInto(next, watched ? 1.15f : 0.85f));
+                    if (atYou) waitUntil = Mathf.Max(waitUntil, now + 7f);          // it takes its time over it, right there
+                }
+                nextChange = now + Random.Range(14f, 24f) - Mathf.Min(6f, day);
+            }
 
             bool sees = Sees(pp);
             if (sees)
@@ -216,7 +341,7 @@ namespace NightPages
                 {
                     if (!sees && now < knowsUntil && Hidden == null) lastKnown = pp;
                     float left = Move(lastKnown, sees || now - lastSeenAt < 2f ? 3.9f : 3.1f, dt);
-                    if (sees && dist < 1.15f) { Catch("it reached you"); return; }
+                    if (sees && dist < 1.15f && surf == 0) { Catch("it reached you"); return; }
                     if (Hidden != null && sawEnter && maze.Rooms(Pos, Hidden.inside) <= 1) { Go(State.Found, "watched you hide, and is coming to get you"); return; }
                     if (!sees && left < 1.6f)
                     {
@@ -332,6 +457,17 @@ namespace NightPages
 
         void Catch(string how)
         {
+            // The last thing you see: it lunges, right into your face.
+            if (It != null)
+            {
+                Vector3 to = Vis.Level(g.player.transform.position - It.transform.position);
+                if (to.sqrMagnitude > 1e-4f)
+                {
+                    It.transform.rotation = Quaternion.LookRotation(to.normalized);
+                    It.transform.position += to.normalized * Mathf.Max(0f, to.magnitude - 0.45f);
+                }
+                Look.Kick(1f);
+            }
             g.Log("dream maze: " + how);
             Sfx.Ui("sting", 0.9f);
             if (onCatch != null) onCatch(how);

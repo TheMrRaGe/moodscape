@@ -47,9 +47,9 @@ namespace NightPages
         {
             const string Heights = "heights", Water = "water", Dark = "dark";
             AddHaunt("pit", "the floor of the next room is gone", new[] { FearTypes.Nature, Heights }, (c, p, cam) => NextUnseen(c, cam) != null, c => Pit(NextUnseen(c, hCam)));
-            AddHaunt("tall", "the ceiling goes up out of sight", new[] { FearTypes.Nature, Heights, FearTypes.Unknown }, (c, p, cam) => true, Tall);
-            AddHaunt("squeeze", "the walls and ceiling close in", new[] { FearTypes.Trapped }, (c, p, cam) => InMiddle(c, p, 2.6f), Squeeze);
-            AddHaunt("sealed", "every doorway shuts", new[] { FearTypes.Trapped, FearTypes.Hunted }, (c, p, cam) => InMiddle(c, p, 2.8f), Sealed);
+            AddHaunt("tall", "the ceiling goes up out of sight", new[] { FearTypes.Nature, Heights, FearTypes.Unknown }, (c, p, cam) => c.shape != 5, Tall);
+            AddHaunt("squeeze", "the walls and ceiling close in", new[] { FearTypes.Trapped }, (c, p, cam) => InMiddle(c, p, 2.6f) && c.shape == 0 && !AnyMerged(c), Squeeze);
+            AddHaunt("sealed", "every doorway shuts", new[] { FearTypes.Trapped, FearTypes.Hunted }, (c, p, cam) => InMiddle(c, p, 2.8f) && !AnyMerged(c), Sealed);
             AddHaunt("float", "the furniture lifts off the floor", new[] { FearTypes.Uncanny }, (c, p, cam) => Loose(c).Count >= 2, Float);
             AddHaunt("flood", "the room fills with black water", new[] { FearTypes.Nature, Water, FearTypes.Trapped }, (c, p, cam) => !hHidden, Flood);
             AddHaunt("tilt", "the house leans over", new[] { FearTypes.Self, Heights }, (c, p, cam) => true, Tilt);
@@ -109,6 +109,17 @@ namespace NightPages
                 g.StartCoroutine(RunHaunt(h, here, 1f, false));
                 return true;
             }
+            return false;
+        }
+
+        /// <summary>Could this haunt happen right now, where the dreamer is?</summary>
+        public bool CanHaunt(string id, Vector3 playerPos, Camera cam)
+        {
+            if (haunts.Count == 0) BuildHaunts();
+            hPos = playerPos; hCam = cam;
+            var here = CellAt(playerPos);
+            if (here.held || here == exitCell) return false;
+            foreach (var h in haunts) if (h.id == id) return h.can(here, playerPos, cam);
             return false;
         }
 
@@ -388,7 +399,7 @@ namespace NightPages
         IEnumerator Flood(Cell c)
         {
             c.held = true;
-            var water = Build.Box("Rising water", c.root, new Vector3(0f, -0.05f, 0f), new Vector3(Pitch - 0.22f, 0.04f, Pitch - 0.22f), Build.Mat(new Color(0.008f, 0.02f, 0.026f), 0f, 0.96f), false).transform;
+            var water = Build.Box("Rising water", c.root, new Vector3(0f, -0.05f, 0f), new Vector3(Pitch - 0.22f, 0.04f, Pitch - 0.22f), Build.Mat(new Color(0.01f, 0.018f, 0.02f), 0f, 0.62f), false).transform;
             var sound = Sfx.Loop("sink", water, 0.7f, true, 0.7f);
             float level = 0f;
             for (float t = 0f; t < 24f && alive; t += Time.deltaTime)
@@ -462,8 +473,8 @@ namespace NightPages
             for (int i = 0; i < 4; i++)
             {
                 Vector3 p = Corner(i, 3.2f);
-                if (Seen(c.root.TransformPoint(p) + Vector3.up * 1.5f)) continue;       // they are only ever there already
-                var f = Build.Figure("Watcher", group);
+                if (Blocked(c, p) || Seen(c.root.TransformPoint(p) + Vector3.up * 1.5f)) continue;       // they are only ever there already
+                var f = Person("Watcher", group, i);
                 f.localPosition = p;
                 f.localRotation = Quaternion.LookRotation(new Vector3(p.x, 0f, p.z));
                 figs.Add(f);
@@ -492,6 +503,36 @@ namespace NightPages
             if (!alive) yield break;
             Object.Destroy(group.gameObject);
             c.held = false;
+        }
+
+        // A person, from behind: a nightdress or a suit, pale arms, dark hair. Someone who lived here, maybe. (Not the
+        // flat black dummy of the waking house's dreams: these should be people until they turn round.)
+        Transform Person(string name, Transform parent, int i)
+        {
+            var root = new GameObject(name).transform;
+            root.SetParent(parent, false);
+            Color[] cloth = { new Color(0.62f, 0.6f, 0.55f), new Color(0.12f, 0.12f, 0.14f), new Color(0.36f, 0.3f, 0.36f), new Color(0.5f, 0.44f, 0.36f) };
+            var clothes = Build.Mat(cloth[(i + rng.Next(4)) % cloth.Length], 0f, 0.1f);
+            var skin = Build.Mat(new Color(0.66f, 0.6f, 0.55f), 0f, 0.25f);
+            var hair = Build.Mat(new Color(0.06f, 0.05f, 0.045f), 0f, 0.3f);
+            bool dress = rng.Next(2) == 0;
+            float tall = 0.95f + (float)rng.NextDouble() * 0.12f;
+            root.localScale = Vector3.one * tall;
+            if (dress) Build.Prim(PrimitiveType.Cylinder, "Nightdress", root, new Vector3(0f, 0.72f, 0f), new Vector3(0.46f, 0.7f, 0.34f), clothes, false);
+            else
+            {
+                Build.Prim(PrimitiveType.Capsule, "Leg", root, new Vector3(-0.1f, 0.45f, 0f), new Vector3(0.15f, 0.47f, 0.15f), clothes, false);
+                Build.Prim(PrimitiveType.Capsule, "Leg", root, new Vector3(0.1f, 0.45f, 0f), new Vector3(0.15f, 0.47f, 0.15f), clothes, false);
+            }
+            Build.Prim(PrimitiveType.Capsule, "Body", root, new Vector3(0f, 1.18f, 0f), new Vector3(0.42f, 0.36f, 0.25f), clothes, false);
+            Build.Prim(PrimitiveType.Capsule, "Arm", root, new Vector3(-0.25f, 1.05f, 0f), new Vector3(0.1f, 0.36f, 0.1f), skin, false);
+            Build.Prim(PrimitiveType.Capsule, "Arm", root, new Vector3(0.25f, 1.05f, 0f), new Vector3(0.1f, 0.36f, 0.1f), skin, false);
+            Build.Prim(PrimitiveType.Sphere, "Neck", root, new Vector3(0f, 1.5f, 0f), new Vector3(0.1f, 0.12f, 0.1f), skin, false);
+            Build.Prim(PrimitiveType.Sphere, "Head", root, new Vector3(0f, 1.66f, 0f), new Vector3(0.2f, 0.25f, 0.22f), skin, false);
+            // Hair over the back of the head and down: from behind, no face.
+            Build.Prim(PrimitiveType.Sphere, "Hair", root, new Vector3(0f, 1.68f, -0.03f), new Vector3(0.22f, 0.25f, 0.21f), hair, false);
+            if (dress) Build.Prim(PrimitiveType.Cube, "Long hair", root, new Vector3(0f, 1.44f, -0.08f), new Vector3(0.2f, 0.42f, 0.05f), hair, false);
+            return root;
         }
 
         // You are small. The room is the same; you aren't.
