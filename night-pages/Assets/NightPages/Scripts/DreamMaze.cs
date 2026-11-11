@@ -17,20 +17,36 @@ namespace NightPages
     /// Pages are scattered through it: this run's story, written from what the storyteller has actually done to you.
     /// Reading one buys a little time and lights the next doorways toward the way out for a while.
     /// </summary>
-    public class DreamMaze
+    public partial class DreamMaze
     {
         public const float Pitch = 8f, H = 3f, Gap = 1.4f, DoorH = 2.2f;
 
-        class Side { public GameObject solid, door; public Renderer[] frame; }
-        class Cell
+        internal class Side { public GameObject solid, door; public Renderer[] frame; }
+        /// <summary>Somewhere to hide: a locker or a cabinet to shut yourself in, or a table to get under.</summary>
+        public class HideSpot
         {
+            public string what;             // "locker", "cabinet", "table"
+            public bool under;              // under it (a table: only any good in the dark), not inside it
+            public Vector3 inside, outside; // where you are when hidden, and where you step back out to
+            public float yaw;               // the way you face while hidden (out into the room)
+            public Collider solid;
+            public Transform root;
+            internal Cell cell;
+        }
+
+        internal class Cell
+        {
+            public bool lit, held;            // held: something is happening in it; it isn't rearranged or refurnished meanwhile
+            public Light lamp;
+            public GameObject slab, ceiling;
+            public readonly List<HideSpot> hides = new List<HideSpot>();
             public int x, z, theme, kind;
             public Transform root, contents;
             public Side[] sides = new Side[4];          // 0 east (+x), 1 west, 2 north (+z), 3 south
             public Renderer floor;
             public Interactable page;
         }
-        class Edge { public Cell a, b; public int sideA, sideB; public bool open; public Vector3 mid; public float glowUntil; }
+        class Edge { public Cell a, b; public int sideA, sideB; public bool open; public Vector3 mid; public float glowUntil, sealedUntil; }
 
         readonly GameDirector g;
         readonly Transform root;
@@ -45,6 +61,8 @@ namespace NightPages
         float nextShift;
         int rot;                                       // 0..3: how far the walls have gone
         public int shifts, pagesRead, pagesPlaced, exitMoves;
+        /// <summary>Called when the dreamer uses a hiding place.</summary>
+        public System.Action<HideSpot> onHide;
         public int Size { get { return n; } }
 
         static readonly Color[] Papers =
@@ -77,8 +95,8 @@ namespace NightPages
             root.localPosition = -Local(sx, sz);
 
             float span = n * Pitch;
-            Build.Box("Floor", root, new Vector3(0f, -0.1f, 0f), new Vector3(span + 0.4f, 0.2f, span + 0.4f), new Color(0.1f, 0.08f, 0.07f));
-            Build.Box("Ceiling", root, new Vector3(0f, H + 0.1f, 0f), new Vector3(span + 0.4f, 0.2f, span + 0.4f), new Color(0.16f, 0.15f, 0.14f));
+            // (Each room has its own floor and ceiling: in a dream either can go.)
+            Build.Box("Under everything", root, new Vector3(0f, -60f, 0f), new Vector3(span + 0.4f, 0.2f, span + 0.4f), Color.black);
 
             for (int x = 0; x < n; x++)
                 for (int z = 0; z < n; z++)
@@ -116,11 +134,15 @@ namespace NightPages
 
         Material WallMat(int theme, int level)
         {
-            int key = theme * 10 + level;
+            // One material for each wallpaper. The rot isn't painted on: it's the wall shader, live, and how far it has
+            // got is one number for the whole maze (see Tick).
+            int key = theme;
             Material m;
             if (wallMats.TryGetValue(key, out m) && m != null) return m;
-            m = Build.Mat(Color.white, 0f, 0.06f);
-            m.mainTexture = MazeTextures.Wall(Papers[theme % Papers.Length], level, theme * 7 + level * 3);
+            var rotShader = Shader.Find("NightPages/Rot");
+            m = rotShader != null ? new Material(rotShader) : Build.Mat(Color.white, 0f, 0.06f);
+            if (rotShader == null) Debug.LogWarning("[NightPages] the Rot shader is missing: the maze walls won't rot");
+            m.mainTexture = MazeTextures.Wall(Papers[theme % Papers.Length], 0, theme * 7);
             m.mainTextureScale = new Vector2(Pitch / 2.4f, H / 2.4f);
             wallMats[key] = m;
             return m;
@@ -133,8 +155,9 @@ namespace NightPages
             c.root.SetParent(root, false);
             c.root.localPosition = Local(x, z);
             var wall = WallMat(c.theme, 0);
-            var floor = Build.Box("Room floor", c.root, new Vector3(0f, 0.005f, 0f), new Vector3(Pitch - 0.2f, 0.01f, Pitch - 0.2f), Floors[rng.Next(Floors.Length)], false);
-            c.floor = floor.GetComponent<Renderer>();
+            c.slab = Build.Box("Room floor", c.root, new Vector3(0f, -0.1f, 0f), new Vector3(Pitch, 0.2f, Pitch), Floors[rng.Next(Floors.Length)]);
+            c.floor = c.slab.GetComponent<Renderer>();
+            c.ceiling = Build.Box("Room ceiling", c.root, new Vector3(0f, H + 0.1f, 0f), new Vector3(Pitch, 0.2f, Pitch), new Color(0.16f, 0.15f, 0.14f));
             float half = Pitch / 2f - 0.05f, jamb = (Pitch - Gap) / 2f;
             for (int s = 0; s < 4; s++)
             {
@@ -174,8 +197,9 @@ namespace NightPages
 
         void Apply(Edge e)
         {
-            e.a.sides[e.sideA].solid.SetActive(!e.open); e.a.sides[e.sideA].door.SetActive(e.open);
-            e.b.sides[e.sideB].solid.SetActive(!e.open); e.b.sides[e.sideB].door.SetActive(e.open);
+            bool show = e.open && e.sealedUntil <= Time.time;
+            e.a.sides[e.sideA].solid.SetActive(!show); e.a.sides[e.sideA].door.SetActive(show);
+            e.b.sides[e.sideB].solid.SetActive(!show); e.b.sides[e.sideB].door.SetActive(show);
         }
 
         // ---------------------------------------------------------------- which rooms join
@@ -260,19 +284,7 @@ namespace NightPages
             if (here == exitCell) return exit.position;
             var prev = Walk(exitCell);
             if (!prev.ContainsKey(here)) return exit.position;
-            var next = prev[here];
-            var e = Between(here, next);
-            Vector3 door = World(e.mid), into = World(Local(next.x, next.z));
-            Vector3 flat = door - pos; flat.y = 0f;
-            Vector3 toRoom = (into - door).normalized;
-            // Line up with the doorway first, then go through it.
-            Vector3 before = door - toRoom * 0.9f;
-            if (Vector3.Dot(pos - before, toRoom) < -0.25f || Mathf.Abs(Vector3.Dot(pos - door, Vector3.Cross(Vector3.up, toRoom))) > 0.35f)
-            {
-                Vector3 off = pos - before; off.y = 0f;
-                if (off.magnitude > 0.3f && Vector3.Dot(pos - door, toRoom) < 0f) return before;
-            }
-            return door + toRoom * 1.6f;
+            return Through(pos, here, prev[here]);
         }
 
         public int RoomsToExit(Vector3 pos) { return Distance(CellAt(pos), exitCell); }
@@ -305,8 +317,21 @@ namespace NightPages
         };
         static readonly float[] FurnitureH = { 0.95f, 0.75f, 1.9f, 0.9f, 0.9f, 2.1f, 0.95f, 1.05f, 0.9f, 0.9f };
 
+        // Is this spot on the floor needed for getting into a hiding place?
+        bool NearHide(Cell c, Vector3 at)
+        {
+            foreach (var h in c.hides)
+            {
+                Vector3 spot = h.root.localPosition, front = c.root.InverseTransformPoint(h.outside);
+                front.y = 0f;
+                if ((spot - at).magnitude < 1.5f || (front - at).magnitude < 1.5f) return true;
+            }
+            return false;
+        }
+
         GameObject Thing(Cell c, int which, Vector3 at, float yaw, bool onCeiling = false)
         {
+            if (!onCeiling && NearHide(c, at)) return null;        // never furniture in front of somewhere to hide
             GameObject hit;
             var go = Models.Place(Furniture[which], c.contents, onCeiling ? Vector3.zero : at, FurnitureH[which], yaw, out hit, !onCeiling);
             if (go == null)
@@ -333,14 +358,24 @@ namespace NightPages
 
         void Furnish(Cell c)
         {
+            if (c.held) return;
             if (c.contents != null) Object.Destroy(c.contents.gameObject);
             c.contents = new GameObject("Contents").transform;
             c.contents.SetParent(c.root, false);
             c.page = null;
+            c.hides.Clear();
             c.kind = c == exitCell ? 0 : rng.Next(9);
-            // A bare bulb in most rooms (the light itself is the one that follows the dreamer).
-            if (rng.Next(4) != 0)
+            // About half the rooms have a working bulb. The rest are dark: you carry very little light of your own.
+            c.lit = c == exitCell || rng.Next(100) < 50;
+            c.lamp = null;
+            if (c.lit)
+            {
                 Build.Prim(PrimitiveType.Sphere, "Bulb", c.contents, new Vector3(0f, H - 0.12f, 0f), new Vector3(0.09f, 0.11f, 0.09f), Build.Mat(new Color(1f, 0.85f, 0.6f), 1.2f), false);
+                c.lamp = Build.Lamp("Room light", c.contents, new Vector3(0f, H - 0.4f, 0f), new Color(1f, 0.86f, 0.66f), 2.6f, 9.5f);
+            }
+            // Most rooms have somewhere to hide, against a wall away from the doorways.
+            if (c != exitCell && rng.Next(100) < 70) AddHide(c, rng.Next(3), rng.Next(4));
+            if (c != exitCell && rng.Next(100) < 25) AddHide(c, 2, rng.Next(4));
             switch (c.kind)
             {
                 case 0: break;                                           // empty: just the room
@@ -388,11 +423,154 @@ namespace NightPages
                     var dm = Build.Mat(new Color(0.13f, 0.09f, 0.07f));
                     for (int i = 0; i < 4; i++)
                     {
+                        if (NearHide(c, Corner(i, 2.2f))) continue;
                         var d = Build.Box("Door to nowhere", c.contents, Corner(i, 2.2f) + Vector3.up * 1.05f, new Vector3(1f, 2.1f, 0.07f), dm, true);
                         d.transform.localRotation = Quaternion.Euler(0f, rng.Next(360), 0f);
                     }
                     break;
             }
+        }
+
+        // ---------------------------------------------------------------- hiding places
+
+        // kind 0: a steel locker, 1: a wooden cabinet (both: shut yourself in, look out through the slats),
+        // 2: a table to get under. `where` picks one of four places, each to one side of a doorway against a wall.
+        void AddHide(Cell c, int kind, int where)
+        {
+            foreach (var h in c.hides) if ((h.root.localPosition - Spot(where)).sqrMagnitude < 1f) return;
+            Vector3 at = Spot(where);
+            // It stands with its back to the nearest wall and opens toward the middle of the room.
+            Vector3 outDir = Mathf.Abs(at.x) > Mathf.Abs(at.z) ? new Vector3(-Mathf.Sign(at.x), 0f, 0f) : new Vector3(0f, 0f, -Mathf.Sign(at.z));
+            var t = new GameObject(kind == 0 ? "Locker" : kind == 1 ? "Cabinet" : "Table").transform;
+            t.SetParent(c.contents, false);
+            t.localPosition = at;
+            t.localRotation = Quaternion.LookRotation(outDir);
+            var spot = new HideSpot { root = t, cell = c, under = kind == 2, what = kind == 0 ? "locker" : kind == 1 ? "cabinet" : "table" };
+            GameObject body;
+            if (kind == 2)
+            {
+                var wood = Build.Mat(new Color(0.24f, 0.16f, 0.1f), 0f, 0.2f);
+                Build.Box("Top", t, new Vector3(0f, 0.78f, 0f), new Vector3(1.7f, 0.06f, 0.95f), wood, false);
+                for (int i = 0; i < 4; i++) Build.Box("Leg", t, new Vector3((i & 1) == 0 ? -0.78f : 0.78f, 0.375f, (i & 2) == 0 ? -0.4f : 0.4f), new Vector3(0.07f, 0.75f, 0.07f), wood, false);
+                // A cloth hanging over the far side and the ends: under it, in the dark, you're a shape among shapes.
+                var cloth = Build.Mat(new Color(0.3f, 0.28f, 0.25f));
+                Build.Box("Cloth", t, new Vector3(0f, 0.55f, -0.47f), new Vector3(1.72f, 0.5f, 0.02f), cloth, false);
+                body = Build.Box("Table collider", t, new Vector3(0f, 0.4f, 0f), new Vector3(1.7f, 0.8f, 0.95f), wood, true);
+                body.GetComponent<Renderer>().enabled = false;
+                spot.inside = t.TransformPoint(new Vector3(0f, 0.02f, 0f));
+            }
+            else
+            {
+                var m = kind == 0 ? Build.Mat(new Color(0.2f, 0.24f, 0.25f), 0f, 0.45f) : Build.Mat(new Color(0.2f, 0.13f, 0.08f), 0f, 0.2f);
+                float w = kind == 0 ? 0.8f : 1.1f, d = 0.75f, h = 2.0f;
+                Build.Box("Back", t, new Vector3(0f, h / 2f, -d / 2f), new Vector3(w, h, 0.03f), m, false);
+                Build.Box("Side", t, new Vector3(-w / 2f, h / 2f, 0f), new Vector3(0.03f, h, d), m, false);
+                Build.Box("Side", t, new Vector3(w / 2f, h / 2f, 0f), new Vector3(0.03f, h, d), m, false);
+                Build.Box("Top", t, new Vector3(0f, h, 0f), new Vector3(w, 0.03f, d), m, false);
+                // The door: solid below, slats at eye height that you can see out between.
+                Build.Box("Door", t, new Vector3(0f, 0.7f, d / 2f), new Vector3(w, 1.4f, 0.03f), m, false);
+                Build.Box("Door", t, new Vector3(0f, 1.9f, d / 2f), new Vector3(w, 0.2f, 0.03f), m, false);
+                for (int i = 0; i < 5; i++) Build.Box("Slat", t, new Vector3(0f, 1.44f + i * 0.085f, d / 2f), new Vector3(w, 0.035f, 0.03f), m, false);
+                body = Build.Box("Hide collider", t, new Vector3(0f, h / 2f, 0f), new Vector3(w, h, d), m, true);
+                body.GetComponent<Renderer>().enabled = false;
+                spot.inside = t.TransformPoint(new Vector3(0f, 0.02f, -0.05f));
+            }
+            spot.solid = body.GetComponent<Collider>();
+            spot.outside = t.TransformPoint(new Vector3(0f, 0.05f, kind == 2 ? 1.15f : 1.05f));
+            spot.yaw = Mathf.Atan2(outDir.x, outDir.z) * Mathf.Rad2Deg + root.eulerAngles.y;
+            var it = Build.Usable(body, kind == 2 ? "Get under the table" : "Hide in the " + spot.what);
+            it.use = () => { if (onHide != null) onHide(spot); };
+            c.hides.Add(spot);
+        }
+
+        // Four places against the walls, each well to one side of that wall's doorway.
+        static Vector3 Spot(int i)
+        {
+            const float wall = Pitch / 2f - 0.6f, off = 2.2f;
+            switch (i & 3)
+            {
+                case 0: return new Vector3(wall, 0f, off);
+                case 1: return new Vector3(-wall, 0f, -off);
+                case 2: return new Vector3(-off, 0f, wall);
+                default: return new Vector3(off, 0f, -wall);
+            }
+        }
+
+        /// <summary>The nearest hiding place by walking distance (within `rooms` rooms), or null.</summary>
+        public HideSpot NearestHide(Vector3 pos, int rooms, bool preferInside = false)
+        {
+            var here = CellAt(pos);
+            var prev = Walk(here);
+            HideSpot best = null;
+            float bestD = float.MaxValue;
+            foreach (var c in prev.Keys)
+            {
+                int d = 0;
+                for (var k = c; k != here; k = prev[k]) d++;
+                if (d > rooms) continue;
+                foreach (var h in c.hides)
+                {
+                    float score = d * Pitch + (c == here ? (h.outside - pos).magnitude : 4f) + (preferInside && h.under ? 100f : 0f);
+                    if (score < bestD) { bestD = score; best = h; }
+                }
+            }
+            return best;
+        }
+
+        public List<HideSpot> HidesIn(Vector3 pos) { return CellAt(pos).hides; }
+        public bool Dark(Vector3 pos) { return !CellAt(pos).lit; }
+        /// <summary>Is a haunt going on in the room at `pos`?</summary>
+        public bool Busy(Vector3 pos) { return CellAt(pos).held; }
+        public bool SameRoom(Vector3 a, Vector3 b) { return CellAt(a) == CellAt(b); }
+        public Vector3 RoomCentre(Vector3 pos) { var c = CellAt(pos); return World(Local(c.x, c.z)); }
+
+        /// <summary>How many rooms' walk from a to b (-1 if there's no way).</summary>
+        public int Rooms(Vector3 a, Vector3 b) { return Distance(CellAt(a), CellAt(b)); }
+
+        /// <summary>Where to walk next to get from `pos` to `target` through the doorways as they are now.</summary>
+        public Vector3 GuideTo(Vector3 pos, Vector3 target)
+        {
+            Cell here = CellAt(pos), goal = CellAt(target);
+            if (here == goal) return target;
+            var prev = Walk(goal);
+            if (!prev.ContainsKey(here)) return target;
+            return Through(pos, here, prev[here]);
+        }
+
+        // Line up with the doorway into `next`, then go through it.
+        Vector3 Through(Vector3 pos, Cell here, Cell next)
+        {
+            var e = Between(here, next);
+            Vector3 door = World(e.mid), into = World(Local(next.x, next.z));
+            Vector3 toRoom = (into - door).normalized;
+            Vector3 before = door - toRoom * 0.9f;
+            float along = Vector3.Dot(pos - door, toRoom), across = Mathf.Abs(Vector3.Dot(pos - door, Vector3.Cross(Vector3.up, toRoom)));
+            if (along < -1.1f || (along < 0f && across > 0.35f))
+            {
+                Vector3 off = pos - before; off.y = 0f;
+                if (off.magnitude > 0.3f) return before;
+            }
+            return door + toRoom * 1.6f;
+        }
+
+        /// <summary>A room's middle at least `rooms` rooms' walk from `from` that the camera can't see: where something can arrive from.</summary>
+        public Vector3 FarUnseen(Vector3 from, int rooms, Camera cam)
+        {
+            var here = CellAt(from);
+            var prev = Walk(here);
+            Cell best = null;
+            int bestScore = int.MinValue;
+            foreach (var c in prev.Keys)
+            {
+                int d = 0;
+                for (var k = c; k != here; k = prev[k]) d++;
+                Vector3 w = World(Local(c.x, c.z));
+                if (d < 2 || Vis.Sees(cam, w + Vector3.up * 1.4f)) continue;
+                int score = -Mathf.Abs(d - rooms) * 10 + rng.Next(6);
+                if (score > bestScore) { bestScore = score; best = c; }
+            }
+            if (best == null) best = Furthest(here, null);
+            return World(Local(best.x, best.z));
         }
 
         // ---------------------------------------------------------------- the way out
@@ -510,6 +688,9 @@ namespace NightPages
             var here = CellAt(playerPos);
             bool entered = here != lastCell;
             lastCell = here;
+            // The rot: nothing for the first third of the night, then it creeps, everywhere, until the walls are mostly it.
+            Shader.SetGlobalFloat("_NPRot", Mathf.Clamp01((0.68f - left01) / 0.68f) * 0.8f);      // (some paper always shows through)
+            Shader.SetGlobalFloat("_NPFloorY", root.position.y);
             int wantRot = left01 > 0.6f ? 0 : left01 > 0.35f ? 1 : left01 > 0.15f ? 2 : 3;
             if (wantRot != rot)
             {
@@ -544,9 +725,9 @@ namespace NightPages
                 before[e] = e.open;
                 Vector3 w = World(e.mid);
                 bool near = (w - playerPos).sqrMagnitude < 2.2f * 2.2f;         // never shut a doorway on the dreamer
-                if (near || e.glowUntil > Time.time) continue;
+                if (near || e.glowUntil > Time.time || e.a.held || e.b.held || e.sealedUntil > Time.time) continue;
                 if (Vis.Sees(cam, w + Vector3.up * 1.1f) || Vis.Sees(cam, w + Vector3.up * 0.3f)) continue;
-                free.Add(e);
+                if (rng.NextDouble() < 0.3) free.Add(e);            // a few at a time: it shifts, it doesn't reshuffle
             }
             if (free.Count == 0) return;
             Connect(free);
@@ -562,10 +743,10 @@ namespace NightPages
             // Rooms out of sight and not next door become something else.
             foreach (var c in cells)
             {
-                if (c == here || c == exitCell || c.page != null) continue;
+                if (c == here || c == exitCell || c.page != null || c.held) continue;
                 Vector3 w = World(Local(c.x, c.z));
                 if ((w - playerPos).magnitude < Pitch * 1.3f || Vis.Sees(cam, w + Vector3.up * 1.4f)) continue;
-                if (rng.NextDouble() > 0.4) continue;
+                if (rng.NextDouble() > 0.18) continue;
                 if (rng.Next(3) == 0) c.theme = rng.Next(Papers.Length);
                 Paper(c);
                 Furnish(c);
@@ -578,6 +759,7 @@ namespace NightPages
 
         public void Destroy()
         {
+            alive = false;
             if (tick != null) Object.Destroy(tick.gameObject);
         }
     }

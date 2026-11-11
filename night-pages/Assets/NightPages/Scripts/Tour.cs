@@ -80,6 +80,7 @@ namespace NightPages
                         if (a[i] == "-npbot") { Mode = "bot"; OutDir = a[i + 1]; }
                         if (a[i] == "-npvideo") { Mode = "video"; OutDir = a[i + 1]; }
                         if (a[i] == "-npstudio") { Mode = "studio"; OutDir = a[i + 1]; }
+                        if (a[i] == "-npdemo") { Mode = "demo"; OutDir = a[i + 1]; }
                         if (a[i] == "-npruns") int.TryParse(a[i + 1], out Runs);
                     }
                 }
@@ -127,6 +128,7 @@ namespace NightPages
             if (Tour.Mode == "tour") yield return CaptureTour(summary);
             else if (Tour.Mode == "video") yield return MonsterVideo(summary);
             else if (Tour.Mode == "studio") yield return StudioFilm(summary);
+            else if (Tour.Mode == "demo") yield return DemoFilm(summary);
             else yield return BotRuns(summary);
             summary.Append("  \"errors\": ").Append(Tour.Errors.Count).Append(",\n");
             summary.Append("  \"models_installed\": ").Append(Models.Installed).Append(",\n  \"models_missing\": ").Append(Models.Missing).Append("\n}\n");
@@ -478,6 +480,17 @@ namespace NightPages
             yield return Settle(0.8f);
             player.LookPitch(2f);
             for (int v = 0; v < 4; v++) { player.Teleport(player.transform.position, v * 90f); yield return Settle(0.25f); Shot("dream maze start, view " + (v + 1)); }
+            // A short film of the rot coming (the night run fast): frames, like the monster film.
+            dream.AddTime(-(dream.TimeLeft - 150f));
+            Time.captureFramerate = 30;
+            for (int f = 0; f < 240; f++)
+            {
+                if (dream.TimeLeft > 45f) dream.AddTime(-0.45f);
+                if (f % 80 == 79) player.Teleport(player.transform.position, (f / 80 + 1) * 90f);
+                Frame();
+                yield return null;
+            }
+            Time.captureFramerate = 0;
             dream.AddTime(-(dream.TimeLeft - 40f));
             for (int hop = 0; hop < 3; hop++)
             {
@@ -990,19 +1003,40 @@ namespace NightPages
                                 else Problem("dying in the dream didn't start the dream again");
                                 deathsBefore = dreamDeaths;
                             }
+                            int botHides = 0;
+                            float botNote = 0f;
                             float mazeStart = Time.time, nightAtStart = dream.TimeLeft, stuckFor = 0f, bestD = float.MaxValue, sideUntil = 0f;
                             Vector3 lastGoal = Vector3.zero, sideGoal = Vector3.zero;
                             while (Time.time < mazeStart + 420f && dream.active && phase == Phase.Dream && dreamDeaths == deathsBefore)
                             {
                                 Reactions.Override = Mathf.Clamp(0.25f + 0.6f * Mathf.Sin(Time.time * 0.7f) + Random.Range(-0.2f, 0.2f), -1f, 1f);
-                                if (!busy && dream.Maze != null && hud.modal == Modal.None)
+                                var st = dream.Stalker;
+                                bool hunted = st != null && st.state != MazeStalker.State.Calm && st.state != MazeStalker.State.Leave;
+                                if (st != null && st.Hidden != null)
+                                {
+                                    // Stay put until it has gone.
+                                    if (!hunted) st.Unhide();
+                                }
+                                else if (!busy && dream.Maze != null && hud.modal == Modal.None)
                                 {
                                     Vector3 goal = dream.Maze.Guide(player.transform.position);
+                                    // A wave: make for the nearest hiding place (this room or next door) and get in.
+                                    var hide = hunted ? dream.Maze.NearestHide(player.transform.position, 1) : null;
+                                    if (hunted && Time.time > botNote)
+                                    {
+                                        botNote = Time.time + 2f;
+                                        Log("bot: hunted (" + st.state + "): " + (hide == null ? "nowhere to hide within a room" : "making for the " + hide.what + ", " + Vis.Level(hide.outside - player.transform.position).magnitude.ToString("0.0") + " m off") + "; it is " + (st.It != null ? Vis.Level(st.It.transform.position - player.transform.position).magnitude.ToString("0.0") + " m away" : "not here yet"));
+                                    }
+                                    if (hide != null)
+                                    {
+                                        goal = dream.Maze.GuideTo(player.transform.position, hide.outside);
+                                        if (Vis.Level(hide.outside - player.transform.position).magnitude < 0.6f) { st.Hide(hide); botHides++; continue; }
+                                    }
                                     if ((goal - lastGoal).sqrMagnitude > 0.04f) { lastGoal = goal; bestD = float.MaxValue; stuckFor = 0f; }
                                     if (Time.time < sideUntil) player.WalkToward(sideGoal, 3.2f);
                                     else
                                     {
-                                        float dd = player.WalkToward(goal, 3.2f);
+                                        float dd = player.WalkToward(goal, hunted ? 4.4f : 3.2f);      // (hunted: run)
                                         if (dd < bestD - 0.03f) { bestD = dd; stuckFor = 0f; } else stuckFor += Time.deltaTime;
                                         if (stuckFor > 0.5f)
                                         {
@@ -1018,8 +1052,9 @@ namespace NightPages
                                 yield return null;
                             }
                             Reactions.Override = null;
-                            if (dreamDeaths > deathsBefore) Problem("the bot, walking straight to the way out, didn't get out of the dream maze on day " + sleptOn + " (night was " + nightAtStart.ToString("0") + " s)");
-                            else if (Time.time < mazeStart + 420f) Log("bot: out of the dream maze on day " + sleptOn + " in " + (Time.time - mazeStart).ToString("0") + " s of a " + nightAtStart.ToString("0") + " s night");
+                            if (dreamDeaths > deathsBefore && lastDreamDeath != "the night ran out") Log("bot: caught in the dream maze on day " + sleptOn + " (" + lastDreamDeath + "; hid " + botHides + " times)");
+                            else if (dreamDeaths > deathsBefore) Problem("the bot, heading straight for the way out and hiding from each wave, didn't get out of the dream maze on day " + sleptOn + " (night was " + nightAtStart.ToString("0") + " s, hid " + botHides + " times)");
+                            else if (Time.time < mazeStart + 420f) Log("bot: out of the dream maze on day " + sleptOn + " in " + (Time.time - mazeStart).ToString("0") + " s of a " + nightAtStart.ToString("0") + " s night (hid " + botHides + " times)");
                             if (dreamDeaths > deathsBefore) yield return WaitFor(() => phase == Phase.Dream && !busy && dream.active, 30f, "the dream to start again");
                             if (dream.active && phase == Phase.Dream) dream.ForceEnd();
                             yield return WaitFor(() => !busy && phase != Phase.Dream, 30f, "waking up");

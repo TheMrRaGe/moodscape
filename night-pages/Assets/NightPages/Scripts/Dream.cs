@@ -35,6 +35,7 @@ namespace NightPages
         readonly List<Pending> pending = new List<Pending>();
         Material paintMat;
         DreamMaze maze;
+        MazeStalker stalker;
         float deadline, nightLength, timerShown;
         int warned;
         Texture2D fallback;
@@ -56,6 +57,9 @@ namespace NightPages
         /// <summary>The texture hung on walls: the live Moodscape painting, or a stand-in when the painter is off.</summary>
         /// <summary>The maze this dream is (see DreamMaze), while one is running.</summary>
         public DreamMaze Maze { get { return maze; } }
+
+        /// <summary>The thing hunting in the maze (see MazeStalker).</summary>
+        public MazeStalker Stalker { get { return stalker; } }
 
         /// <summary>Seconds of night left to get out in.</summary>
         public float TimeLeft { get { return maze != null ? Mathf.Max(0f, deadline - Time.time) : 0f; } }
@@ -128,17 +132,21 @@ namespace NightPages
             int size = day <= 2 ? 4 : day <= 4 ? 5 : 6;
             maze = new DreamMaze(g, root, size, day, Random.Range(1, 1000000), paintMat);
             // Hard, not impossible: enough night to cross it twice over, not enough to see all of it.
-            nightLength = 60f + size * size * 4.5f;
+            nightLength = (60f + size * size * 4.5f) * 1.3f;       // (the extra is for time spent hiding from it)
+            QualitySettings.pixelLightCount = Mathf.Max(QualitySettings.pixelLightCount, 8);      // the room bulbs near you all count
+            stalker = new MazeStalker(g, maze, dyn, day, Origin.y);
+            stalker.onCatch = Die;
+            maze.onHide = stalker.Hide;
             deadline = Time.time + nightLength;
             warned = 0;
             timerShown = -1f;
             var fog = new Color(0.02f, 0.016f, 0.016f);
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
-            RenderSettings.ambientLight = new Color(0.06f, 0.06f, 0.07f);
+            RenderSettings.ambientLight = new Color(0.1f, 0.1f, 0.115f);
             RenderSettings.fog = true;
             RenderSettings.fogMode = FogMode.Exponential;
             RenderSettings.fogColor = fog;
-            RenderSettings.fogDensity = 0.06f;
+            RenderSettings.fogDensity = 0.03f;
             Cam.backgroundColor = fog;
             g.Log("dream: " + nightLength.ToString("0") + " s of night to find the way out");
         }
@@ -147,6 +155,8 @@ namespace NightPages
         {
             Tour.Step("dream clear: start");
             active = false;
+            if (stalker != null) stalker.Cleanup();
+            stalker = null;
             if (maze != null) maze.Destroy();
             maze = null;
             g.fear.onApply = null;
@@ -160,6 +170,8 @@ namespace NightPages
             pending.Clear();
             g.player.speedMul = 1f;
             g.player.eyeHeight = 1.65f;
+            g.player.Roll = 0f;
+            g.player.fovOffset = 0f;
             g.player.Crouch(false);
         }
 
@@ -409,6 +421,7 @@ namespace NightPages
 
         void ApplyPresence(int opt)
         {
+            if (stalker != null) return;                // in the maze it comes and goes in waves of its own
             if (monster != null) Destroy(monster.gameObject);
             monster = null;
             stepsOwed = 0;
@@ -536,6 +549,7 @@ namespace NightPages
             float now = Time.time, dt = Time.deltaTime;
             Vector3 pp = PlayerPos;
 
+            if (stalker != null) monster = stalker.It;
             bool monsterSeen = monster != null && (Vis.Sees(Cam, monster.HeadPos, monster.transform) || Vis.Sees(Cam, monster.transform.position + Vector3.up * 0.6f, monster.transform));
             if (monster != null && monster.ApplyIfUnseen(Cam)) g.Log("dream: it is changing " + (monster.changedInView ? "in front of you" : "while you aren't looking") + ": " + g.fear.DescribeLook(g.fear.Look()));
             if (!ending && !cutting) g.fear.Tick(now, Reactions.Level, Reactions.Watching, monsterSeen);
@@ -564,6 +578,7 @@ namespace NightPages
             if (!ending && pp.y < Origin.y - 6f)
             {
                 Sfx.Ui("sting", 0.9f);
+                if (maze != null) { g.Log("dream: fell"); Die("you fell"); return; }
                 g.Log("dream: fell from the walkway; waking early");
                 End(true);
                 return;
@@ -633,6 +648,9 @@ namespace NightPages
             if (ending) return;
             float left = deadline - now;
             maze.Tick(pp, Cam, Mathf.Clamp01(left / nightLength));
+            // The dream's own haunts: more of them, sooner, while it is toying with you.
+            bool toying = stalker != null && (stalker.state == MazeStalker.State.Toy || stalker.state == MazeStalker.State.Search);
+            maze.TickHaunts(pp, Cam, Mathf.Clamp01(left / nightLength), toying, stalker != null && stalker.Hidden != null);
             float d = (maze.ExitPosition - pp).magnitude;
             if (day >= 3 && !exitMoved && d < 5.5f && maze.RoomsToExit(pp) == 0 && left > 35f)
             {
@@ -679,7 +697,9 @@ namespace NightPages
             if (maze != null)
             {
                 // Indoors and close: you see the room you're in and a little of the next. In the last half-minute the light goes bad.
-                range = 11f;
+                // You carry very little light: the lit rooms are lit by their own bulbs, the dark ones are dark.
+                range = 7f; intensity = Mathf.Clamp(intensity, 0.45f, 1.0f);
+                if (maze.Blackout) intensity = 0.12f + 0.25f * Mathf.PerlinNoise(now * 11f, 3f);
                 float left = deadline - now;
                 if (left < 30f) { c = Color.Lerp(new Color(1f, 0.12f, 0.06f), c, Mathf.Clamp01(left / 30f)); intensity *= Mathf.Lerp(0.75f, 1f, Mathf.Clamp01(left / 30f)); }
             }
@@ -691,6 +711,11 @@ namespace NightPages
 
         void UpdatePresence(float now, float dt, Vector3 pp)
         {
+            if (stalker != null)
+            {
+                if (!ending) stalker.Tick(now, dt, pp, Cam, Mathf.Clamp01((deadline - now) / Mathf.Max(1f, nightLength)));
+                return;
+            }
             int mode = Cur[FearEngine.Behavior];
             if (mode == 1)
             {

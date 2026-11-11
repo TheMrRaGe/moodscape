@@ -140,6 +140,10 @@ namespace NightPages
             return true;
         }
 
+        /// <summary>The same vector laid flat on the floor (its length kept: use this for distances along the ground).</summary>
+        public static Vector3 Level(Vector3 v) { v.y = 0f; return v; }
+
+        /// <summary>The direction of a vector along the floor (always length 1).</summary>
         public static Vector3 Flat(Vector3 v)
         {
             v.y = 0f;

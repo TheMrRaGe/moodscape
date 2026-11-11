@@ -230,7 +230,10 @@ namespace NightPages
 
         public void RefreshDreamTimer() { if (phase == Phase.Dream) RefreshObjectives(); }
 
-        public void OnDreamDeath(string how) { StartCoroutine(DreamDeath(how)); }
+        /// <summary>How the last dream death happened ("the night ran out", "it reached you", ...).</summary>
+        public string lastDreamDeath;
+
+        public void OnDreamDeath(string how) { lastDreamDeath = how; StartCoroutine(DreamDeath(how)); }
 
         // You didn't get out. Hardcore: the run is over, back to day one. Otherwise: asleep again, at the start of
         // the same night's dream, in a maze you haven't seen.
