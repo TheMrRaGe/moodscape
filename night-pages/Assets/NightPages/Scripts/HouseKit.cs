@@ -76,7 +76,7 @@ namespace NightPages
             if (col != null)
             {
                 tip = col.center;
-                if (kind == "broom") tip = col.center - Vector3.up * col.size.y * 0.47f;
+                if (kind == "broom" || kind == "mop") tip = col.center - Vector3.up * col.size.y * 0.47f;
                 else if (capacity > 0f) tip = col.center + new Vector3(0f, col.size.y * 0.35f, col.size.z * 0.45f);
             }
             return Tool.On(m, kind, tip, capacity);
@@ -278,7 +278,21 @@ namespace NightPages
             mugFill.liquid = "water";
             mugFill.can = () => mugCoffee && kettleBoiled && !mugDrunk;
             mugFill.why = () => !mugCoffee ? "Coffee in the mug first (the tin by the kettle)." : !kettleBoiled ? "Boil the kettle first." : "You've had it.";
-            mugFill.finished = () => { coffeeIn.SetActive(true); GameDirector.I.Log("coffee: poured"); };
+            mugFill.finished = () =>
+            {
+                coffeeIn.SetActive(true);
+                GameDirector.I.Log("coffee: poured");
+                // Now it can be spilt: knock it over and it's on the worktop, and you start again.
+                var inMug = Contents.In(myMug.gameObject, "coffee", 0.25f, coffeeIn);
+                inMug.emptied = () =>
+                {
+                    if (mugDrunk) return;
+                    mugCoffee = false;
+                    mugFill.done = 0f;
+                    GameDirector.I.Log("coffee: spilt it. Start again");
+                    GameDirector.I.hud.Say("All of it. You'll have to make another.", 3f);
+                };
+            };
             var mugUse = myMug.GetComponent<Interactable>();
             mugUse.promptFn = () => mugFill.Finished && !mugDrunk ? "Drink your coffee" : !mugCoffee && !mugDrunk ? "Pick up your mug  (coffee: the brown tin by the kettle)" : "Pick up your mug";
             mugUse.use = () =>
@@ -287,6 +301,8 @@ namespace NightPages
                 {
                     mugDrunk = true;
                     coffeeIn.SetActive(false);
+                    var inMug = myMug.GetComponent<Contents>();
+                    if (inMug != null) inMug.litres = 0f;
                     Sfx.At("gasp", myMug.transform.position, 0.12f, 1.6f);
                     GameDirector.I.Log("coffee: drunk. The mug goes in the washing-up");
                     MakeDirty(myMug, "the mug");
@@ -294,7 +310,7 @@ namespace NightPages
                 }
                 else if (Player.I != null) Player.I.PickUp(myMug);
             };
-            mugResetCoffee = () => coffeeIn.SetActive(false);
+            mugResetCoffee = () => { coffeeIn.SetActive(false); var inMug = myMug.GetComponent<Contents>(); if (inMug != null) inMug.litres = 0f; };
             CoffeeTin();
             KitchenKitRest();
         }

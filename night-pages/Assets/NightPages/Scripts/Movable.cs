@@ -28,6 +28,7 @@ namespace NightPages
             m.body.collisionDetectionMode = CollisionDetectionMode.Continuous;
             m.homePos = g.transform.position;
             m.homeRot = g.transform.rotation;
+            Physical.On(m);
             var it = Build.Usable(g, "");
             it.promptFn = () => m.Heavy ? "Drag this" : "Pick this up";
             it.use = () => { if (Player.I != null) Player.I.PickUp(m); };
@@ -41,6 +42,26 @@ namespace NightPages
         /// that it is an ordinary physical thing.
         /// </summary>
         public void Rest() { resting = true; if (body != null) body.isKinematic = true; }
+
+        /// <summary>Knocked, bumped or shaken: an ordinary physical thing again, even if it was resting as arranged.</summary>
+        public void Wake()
+        {
+            if (held || body == null) return;
+            resting = false;
+            body.isKinematic = false;
+            body.WakeUp();
+        }
+
+        /// <summary>Thrown or let go of with some speed.</summary>
+        public void Launch(Vector3 velocity, Vector3 spin)
+        {
+            Wake();
+            if (body == null) return;
+            body.velocity = velocity;
+            body.angularVelocity = spin;
+            var p = GetComponent<Physical>();
+            if (p != null) p.thrown = true;
+        }
 
         /// <summary>Called once everything has been placed, after physics has let it settle.</summary>
         public void RememberHome()

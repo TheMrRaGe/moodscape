@@ -239,6 +239,8 @@ namespace NightPages
             if (speed >= 200f)
             {
                 Sfx.At("slam", Middle, Mathf.Clamp01(0.55f + speed / 900f), 0.95f + Random.value * 0.1f);
+                // A slam shakes the room: what's on the shelves and tables near it rattles, and can fall.
+                Physical.Jostle(Middle, 2.4f, Mathf.Clamp(speed / 900f, 0.2f, 0.6f), -1.5f);
                 if (players) Loud(1f, shut ? "you slammed a door" : "you flung a door against the wall");
             }
             else if (speed >= 115f)

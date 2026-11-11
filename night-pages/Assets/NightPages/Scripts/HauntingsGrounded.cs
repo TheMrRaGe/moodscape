@@ -470,8 +470,8 @@ namespace NightPages
             if (steps.Count > 0)
             {
                 Vector3 last = steps[steps.Count - 1].position;
-                var wipe = g.house.Grit(g.house.transform.InverseTransformPoint(new Vector3(last.x, 0f, last.z)), 0.9f, "the wet floor", new Color(0.06f, 0.05f, 0.045f, 0.75f), new[] { "rag" }, 450f);
-                g.chores.Mess("wet floor", "Wipe up the wet floor (a cloth from the kitchen)", () => wipe == null || wipe.Finished, () => wipe != null ? wipe.transform.position : last,
+                // A real puddle where they stop: it spreads, shines, leaves a green-brown tide mark if it's left to dry.
+                Liquid.Spill(new Vector3(last.x, 0.4f, last.z), 0.5f, "pond water", "Wipe up the wet floor (a cloth from the kitchen)",
                     "The water is cold and smells of the pond. You wring the cloth out twice.");
             }
             yield return new WaitForSeconds(9f);

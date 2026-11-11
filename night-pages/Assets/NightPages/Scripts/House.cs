@@ -96,7 +96,7 @@ namespace NightPages
         /// <summary>Where the chimney meets the outside wall (the fireplace moves with the living room).</summary>
         public Vector3 chimney;
         /// <summary>Furniture the layout check looks at: big things that shouldn't block doors, windows or each other.</summary>
-        readonly List<GameObject> furniture = new List<GameObject>();
+        public readonly List<GameObject> furniture = new List<GameObject>();
         readonly List<Collider> walls = new List<Collider>();
 
         void ChooseLayout()
@@ -498,7 +498,9 @@ namespace NightPages
             PorchKit();
             Switches();
             BuildCellar();
+            BuildClutter();
             Scatter();
+            BuildDirt();
             BuildNav();
 
             SetTime(0, 1);

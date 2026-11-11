@@ -33,6 +33,7 @@ namespace NightPages
             Reactions.ResetStatics();
             VRRig.ResetStatics();
             Work.ResetStatics(); Source.ResetStatics(); Spot.ResetStatics(); ClockFace.ResetStatics();
+            Basin.ResetStatics(); Physical.ResetStatics(); Liquid.ResetStatics(); Stains.ResetStatics();
             House.Switched = null;
             var old = SceneManager.GetActiveScene();
             var fresh = SceneManager.CreateScene("NightPagesRuntime");

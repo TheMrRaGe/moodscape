@@ -6,7 +6,7 @@ using UnityEngine.InputSystem.Controls;
 
 namespace NightPages
 {
-    public enum Btn { Interact, One, Two, Three, Pause, Mind, Scared, Amused, SkipAhead, Restart, Sprint, Voice, Face, Flashlight, Work, Watch, Mark }
+    public enum Btn { Interact, One, Two, Three, Pause, Mind, Scared, Amused, SkipAhead, Restart, Sprint, Voice, Face, Flashlight, Work, Watch, Mark, Throw, Turn }
 
     /// <summary>
     /// All input goes through here, so the game runs whether the project uses Unity's old Input Manager,
@@ -52,11 +52,15 @@ namespace NightPages
         public static bool Down(Btn b)
         {
             if (b == Btn.Work) { var m = Mouse.current; return m != null && m.leftButton.wasPressedThisFrame; }
+            if (b == Btn.Throw) { var m = Mouse.current; return m != null && m.rightButton.wasPressedThisFrame; }
+            if (b == Btn.Turn) { var m = Mouse.current; return m != null && m.middleButton.wasPressedThisFrame; }
             var k = K(b); return (k != null && k.wasPressedThisFrame) || VRRig.Down(b);
         }
         public static bool Held(Btn b)
         {
             if (b == Btn.Work) { var m = Mouse.current; return m != null && m.leftButton.isPressed; }
+            if (b == Btn.Throw) { var m = Mouse.current; return m != null && m.rightButton.isPressed; }
+            if (b == Btn.Turn) { var m = Mouse.current; return m != null && m.middleButton.isPressed; }
             var k = K(b); return (k != null && k.isPressed) || VRRig.Held(b);
         }
 
@@ -75,6 +79,12 @@ namespace NightPages
         public static Vector2 Look
         {
             get { var m = Mouse.current; return m == null ? Vector2.zero : m.delta.ReadValue() * 0.1f; }
+        }
+
+        /// <summary>The mouse wheel this frame, in notches (forward is positive).</summary>
+        public static float Scroll
+        {
+            get { var m = Mouse.current; return m == null ? 0f : m.scroll.ReadValue().y / 120f; }
         }
 #else
         static KeyCode K(Btn b)
@@ -96,6 +106,8 @@ namespace NightPages
                 case Btn.Face: return KeyCode.C;
                 case Btn.Flashlight: return KeyCode.Q;
                 case Btn.Work: return KeyCode.Mouse0;
+                case Btn.Throw: return KeyCode.Mouse1;
+                case Btn.Turn: return KeyCode.Mouse2;
                 case Btn.Watch: return KeyCode.Tab;
                 case Btn.Mark: return KeyCode.F8;
             }
@@ -114,6 +126,9 @@ namespace NightPages
                 return new Vector2(x, y);
             }
         }
+
+        /// <summary>The mouse wheel this frame, in notches (forward is positive).</summary>
+        public static float Scroll { get { return Input.mouseScrollDelta.y; } }
 
         static bool mouseAxesMissing;
 

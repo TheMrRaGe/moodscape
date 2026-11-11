@@ -752,6 +752,36 @@ def make_app(painter, gpu_pool, max_fps, profiles=None):
         app.router.add_get("/api/mirror", mirror_stream)
         app.router.add_get("/api/capture/{name}/{file}", capture_file)
         app.router.add_get("/api/watch", watch)
+
+        async def game_state(request):
+            """For the Night Pages game running on this PC: is a face in view, how strongly it's reacting, and what
+            is being painted. Read-only, and answered only on this PC itself (never through the tunnel)."""
+            if not is_local(request):
+                raise web.HTTPNotFound()
+            if not watched:
+                return web.json_response({"ok": True, "session": False})
+            sess, now = watched[-1]["sess"], time.monotonic()
+            st = sess.status(now)
+            t = sess.taste()
+            unit = max(0.04, t.yscale) if t else 0.15
+            last = sess.samples[-1] if sess.samples else None
+            fresh = last is not None and last[1] is not None and now - last[0] < 0.6
+            reaction = max(-1.0, min(1.0, last[1] / (2 * unit))) if fresh else st["glow"]
+            return web.json_response({"ok": True, "session": True, "face": bool(fresh), "reaction": round(float(reaction), 3),
+                                      "glow": st["glow"], "edition": st["edition"], "showing": st["showing"]},
+                                     headers={"Cache-Control": "no-store"})
+
+        async def game_frame(request):
+            """The newest painted frame, as a JPEG, for the game to hang on its walls. Local only."""
+            if not is_local(request):
+                raise web.HTTPNotFound()
+            jpeg = watched[-1]["jpeg"] if watched else None
+            if not jpeg:
+                return web.Response(status=204)
+            return web.Response(body=jpeg, content_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+        app.router.add_get("/api/game/state", game_state)
+        app.router.add_get("/api/game/frame.jpg", game_frame)
         async def save_profiles(_app):
             profiles.save(force=True)
         app.on_shutdown.append(save_profiles)

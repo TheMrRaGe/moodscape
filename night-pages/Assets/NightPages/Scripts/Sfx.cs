@@ -324,6 +324,40 @@ namespace NightPages
             Make("clunk", 0.6f, t => Thump(t, 0f, 160f, 14f) * 0.5f + Thump(t, 0f, 470f, 25f) * 0.3f + Noise() * Mathf.Exp(-t * 120f) * 0.3f);
             // A ratchet click (winding the clock).
             Make("ratchet", 0.08f, t => Noise() * Mathf.Exp(-t * 160f) * 0.6f + Thump(t, 0f, 1900f, 120f) * 0.4f);
+
+            // ---- things hitting things (pitch is varied per hit, so one clip of each will do)
+
+            // Wood on wood or on the floor: a dull knock with a little body.
+            Make("knock", 0.35f, t => Thump(t, 0f, 140f, 22f) * 0.6f + Thump(t, 0f, 410f, 45f) * 0.35f + Noise() * Mathf.Exp(-t * 160f) * 0.35f);
+            // Crockery or glass set down hard: a short bright ring.
+            Make("clink", 0.6f, t => Mathf.Exp(-t * 14f) * (Sin(2350f, t) * 0.35f + Sin(3710f, t) * 0.22f * Mathf.Exp(-t * 10f) + Sin(5480f, t) * 0.12f * Mathf.Exp(-t * 20f)) + Noise() * Mathf.Exp(-t * 300f) * 0.3f);
+            // Metal: a tin or a pan, inharmonic and ringing on.
+            Make("clang", 1.2f, t => Mathf.Exp(-t * 4.5f) * (Sin(520f, t) * 0.3f + Sin(1270f, t) * 0.22f + Sin(2010f, t) * 0.15f * Mathf.Exp(-t * 6f) + Sin(3330f, t) * 0.08f * Mathf.Exp(-t * 9f)) + Noise() * Mathf.Exp(-t * 200f) * 0.3f);
+            // Something soft landing: paper, cloth, a loaf, a slipper.
+            lp = 0f;
+            Make("flop", 0.3f, t => { lp += (Noise() - lp) * 0.15f; return lp * Mathf.Exp(-t * 18f) * 2.2f + Thump(t, 0f, 90f, 30f) * 0.25f; });
+            // One thing breaking (a cup, a glass): a crack and a scatter of small pieces.
+            var bits = new List<float>();
+            for (float at = 0.02f; at < 0.7f; at += 0.012f + (float)rng.NextDouble() * 0.06f * (1f + at * 4f)) bits.Add(at);
+            Make("crack", 0.9f, t =>
+            {
+                float s = Thump(t, 0f, 260f, 30f) * 0.35f + Noise() * Mathf.Exp(-t * 60f) * 0.5f;
+                foreach (var at in bits)
+                {
+                    float d = t - at;
+                    if (d < 0f || d > 0.04f) continue;
+                    s += Mathf.Exp(-d * 110f) * Sin(2600f + (at * 6151f % 1f) * 3200f, d) * Mathf.Exp(-at * 3f) * 0.45f;
+                }
+                return s;
+            });
+            // Liquid hitting the floor: a slap and a spatter.
+            lp = 0f;
+            Make("splash", 0.8f, t => { lp += (Noise() - lp) * 0.3f; return lp * Mathf.Exp(-t * 7f) * 1.1f * (0.6f + 0.4f * Mathf.PerlinNoise(t * 70f, 0.4f)) + Thump(t, 0f, 110f, 25f) * 0.2f; });
+            // A drop of water from a tap into a sink, or onto a puddle.
+            Make("plink", 0.25f, t => Mathf.Exp(-t * 30f) * Sin(900f + 1400f * Mathf.Exp(-t * 40f), t) * 0.4f);
+            // A wet foot on boards.
+            lp = 0f;
+            Make("squelch", 0.25f, t => { lp += (Noise() - lp) * 0.25f; return lp * Mathf.Sin(Mathf.PI * t / 0.25f) * 0.9f; });
         }
 
         public static AudioClip Clip(string name)

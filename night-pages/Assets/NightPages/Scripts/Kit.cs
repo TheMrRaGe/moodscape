@@ -139,8 +139,23 @@ namespace NightPages
         }
 
         /// <summary>Switch a Standard material to transparent (so it can fade).</summary>
+        static Shader clear;
         public static void Fade(Material m)
         {
+            // Our own see-through shader if it's there (the Standard shader's fade variant is stripped from builds).
+            if (clear == null) clear = Shader.Find("NightPages/Clear");
+            if (clear != null)
+            {
+                var c = m.color;
+                var tex = m.mainTexture;
+                float gloss = m.HasProperty("_Glossiness") ? m.GetFloat("_Glossiness") : 0.5f;
+                m.shader = clear;
+                m.color = c;
+                m.mainTexture = tex;
+                m.SetFloat("_Glossiness", gloss);
+                m.renderQueue = 3000;
+                return;
+            }
             m.SetFloat("_Mode", 2f);
             m.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
             m.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
@@ -188,6 +203,10 @@ namespace NightPages
     /// <summary>A sink: a plug, water that rises while the tap runs and the plug is in, and drains when it's pulled.</summary>
     public class Basin : MonoBehaviour
     {
+        public static readonly List<Basin> All = new List<Basin>();
+        public static void ResetStatics() { All.Clear(); }
+        void OnEnable() { if (!All.Contains(this)) All.Add(this); }
+        void OnDisable() { All.Remove(this); }
         public Source tap;
         public bool plugged;
         public float level;                     // 0..1
@@ -406,6 +425,7 @@ namespace NightPages
                     float amount = Mathf.Min(tool.liquid, dt * 0.25f);
                     tool.liquid -= amount;
                     w.Add(amount);
+                    Liquid.Stream(tool.Tip, tool.holds);
                     Pouring(tool.Tip);
                 }
                 working = w;
@@ -425,6 +445,22 @@ namespace NightPages
                 working = null;
                 filling = true;
                 return "Filling  (" + Mathf.RoundToInt(tool.Full * 100f) + "%)";
+            }
+            // Tipping it out onto whatever's below: the floor, the table, down the sink.
+            if (w == null && tool != null && tool.Container && tool.liquid > 0.001f)
+            {
+                if (!pressing) { spillAcc = 0f; return "[Hold left mouse]  Pour it out"; }
+                pourTilt = Mathf.MoveTowards(pourTilt, 1f, dt * 4f);
+                if (pourTilt > 0.6f)
+                {
+                    float amount = Mathf.Min(tool.liquid, dt * 0.25f);
+                    tool.liquid -= amount;
+                    Liquid.Stream(tool.Tip, tool.holds);
+                    spillAcc += amount;
+                    if (spillAcc > 0.03f || tool.liquid <= 0.001f) { Liquid.Spill(tool.Tip, spillAcc, tool.holds); spillAcc = 0f; }
+                    Pouring(tool.Tip);
+                }
+                return "Pouring it out  (" + Mathf.RoundToInt(tool.Full * 100f) + "% left)";
             }
             if (w == null) return null;
             if (!w.Ready) return w.why != null ? w.why() : null;
@@ -458,6 +494,7 @@ namespace NightPages
         }
 
         bool filling;
+        float spillAcc;
         public bool Filling { get { return filling; } }
         /// <summary>Busy with the mouse (scrubbing, turning, pouring, filling): the view barely moves.</summary>
         public bool Busy { get { return In.Held(Btn.Work) && (working != null || filling); } }
@@ -541,11 +578,18 @@ namespace NightPages
             float amount = Mathf.Min(tool.liquid, dt * 0.25f * Mathf.InverseLerp(70f, 120f, tilt) + dt * 0.05f);
             tool.liquid -= amount;
             RaycastHit hit;
+            bool into = false;
             if (Physics.Raycast(tip, Vector3.down, out hit, 0.9f, ~0, QueryTriggerInteraction.Collide))
             {
                 var w = hit.collider.GetComponentInParent<Work>();
-                if (w != null && w.mode == WorkMode.Fill && w.liquid == tool.holds && w.Ready) w.Add(amount);
+                if (w != null && w.mode == WorkMode.Fill && w.liquid == tool.holds && w.Ready) { w.Add(amount); into = true; }
             }
+            if (!into)
+            {
+                spillAcc += amount;
+                if (spillAcc > 0.03f || tool.liquid <= 0.001f) { Liquid.Spill(tip, spillAcc, tool.holds); spillAcc = 0f; }
+            }
+            Liquid.Stream(tip, tool.holds);
             Pouring(tip);
             return true;
         }

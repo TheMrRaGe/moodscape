@@ -111,6 +111,15 @@ namespace NightPages
                 "Grit from the drive, crumbs, a dead fly. Ordinary dirt.",
                 "The grit by the door is in the shape of a boot. Not yours.",
                 "You sweep up a little pile of grave soil. You know what it is without knowing how.");
+            Add("dust", "Dust the front room (a cloth: the floor cloth by the sink)", T(9), T(13),
+                () => H.Dusted,
+                () => H.DustLeft + " left",
+                () => H.Redust(),
+                () => { foreach (var w in H.dust) if (w != null) w.Add(w.need); },
+                () => { foreach (var w in H.dust) if (w != null && !w.Finished) return w.transform.position; return H.hallNorth; },
+                "The mantel, the cabinet, the television. Grey on the cloth, then clean wood.",
+                "There are finger marks in the dust on the mantel. Small ones.",
+                "You wipe the dust away. It has settled in the shape of a name.");
             Add("fuse", "The kitchen's lost its power (the fuse box)", T(7), T(9, 30),
                 () => H.breaker.on,
                 null,
@@ -198,6 +207,7 @@ namespace NightPages
             var k = H.Find("kitchen");
             if (k != null && k.darkUntil > 1e6f) k.darkUntil = 0f;
             H.Sweepings();
+            H.DirtDay(day);
             foreach (var w in H.grit) if (w != null) w.gameObject.SetActive(false);
             foreach (var id in new[] { "coffee", "dishes", "bed" }) Take(id);
             // A clock nobody wound yesterday is still stopped: it stays on the list until it's wound.

@@ -45,13 +45,41 @@ namespace NightPages
         // Walking into a door pushes it open at walking pace; running into one bangs it.
         void OnControllerColliderHit(ControllerColliderHit hit)
         {
-            var d = hit.collider.GetComponentInParent<Door>();
-            if (d == null || d == holding) return;
             Vector3 m = moveWanted; m.y = 0f;
-            if (m.sqrMagnitude < 0.05f) return;
+            var d = hit.collider.GetComponentInParent<Door>();
+            if (d != null)
+            {
+                if (d == holding || m.sqrMagnitude < 0.05f) return;
+                Vector3 dn = hit.normal; dn.y = 0f;
+                if (dn.sqrMagnitude > 1e-4f && Vector3.Dot(m.normalized, -dn.normalized) < 0.3f) return;      // brushing past, not into it
+                d.Shove(hit.point, transform.position, m.magnitude);
+                return;
+            }
+            if (m.sqrMagnitude < 0.05f || hit.normal.y > 0.7f || hit.collider.isTrigger) return;         // standing on it
             Vector3 n = hit.normal; n.y = 0f;
-            if (n.sqrMagnitude > 1e-4f && Vector3.Dot(m.normalized, -n.normalized) < 0.3f) return;      // brushing past, not into it
-            d.Shove(hit.point, transform.position, m.magnitude);
+            if (n.sqrMagnitude > 1e-4f && Vector3.Dot(m.normalized, -n.normalized) < 0.35f) return;
+            // Small loose things get kicked along; a chair shifts.
+            var ph = hit.collider.GetComponentInParent<Physical>();
+            if (ph != null) { if (ph.mov != carrying) ph.Kicked(m, m.magnitude); return; }
+            // Walking into a table or a dresser rattles what's on it (more if you run).
+            if (m.magnitude < 1.5f || Time.time - lastBump < 0.7f) return;
+            var b = hit.collider.bounds;
+            if (b.size.y > 2.2f || b.max.y < 0.3f || b.size.x > 4f || b.size.z > 4f) return;            // a wall, a step, the floor
+            lastBump = Time.time;
+            int k = Physical.Jostle(b.center, Mathf.Max(b.extents.x, b.extents.z) + 0.1f, 0.1f * m.magnitude, b.extents.y - 0.06f);
+            if (k > 0) Sfx.At("knock", hit.point, 0.15f + 0.05f * m.magnitude, 0.7f + Random.value * 0.15f);
+        }
+        float lastBump;
+
+        /// <summary>Throw what you're carrying (right mouse on a flat screen).</summary>
+        void Throw()
+        {
+            var m = carrying;
+            if (m == null) return;
+            carrying = null;
+            m.SetHeld(false);
+            m.Launch(cam.transform.forward * 6.5f + Vector3.up * 1.1f + cc.velocity, Random.insideUnitSphere * 8f);
+            Sfx.At("whoosh", m.transform.position, 0.12f, 2.2f);
         }
 
         public Vector3 Eye { get { return cam.transform.position; } }
@@ -199,6 +227,7 @@ namespace NightPages
             bool outside = g != null && g.house != null && g.phase != Phase.Dream && g.house.Outside(p) && !porch;
             if (outside) Sfx.At("stepgrass", p, 0.3f, 0.85f + Random.value * 0.3f);
             else Sfx.At("step", p, 0.22f, 0.9f + Random.value * 0.2f);
+            if (g != null && g.phase != Phase.Dream) Liquid.Step(p, Forward, outside, porch);
         }
 
         /// <summary>Pick something up (E on it). E again puts it down where you're looking.</summary>
@@ -208,6 +237,8 @@ namespace NightPages
             carrying = m;
             m.SetHeld(true);
             pickedFrame = Time.frameCount;
+            holdReach = 1.0f;
+            holdTurn = Quaternion.identity;
             Sfx.At(m.Heavy ? "putdown" : "pickup", m.transform.position, m.Heavy ? 0.35f : 0.45f, 0.9f + Random.value * 0.2f);
         }
 
@@ -225,7 +256,8 @@ namespace NightPages
                 Bounds b;
                 if (BoundsOf(m.gameObject, out b))
                 {
-                    m.transform.rotation = Quaternion.Euler(0f, m.transform.eulerAngles.y, 0f);
+                    // Upright, unless you turned it on purpose (then it goes down the way you're holding it).
+                    if (Quaternion.Angle(holdTurn, Quaternion.identity) < 20f) m.transform.rotation = Quaternion.Euler(0f, m.transform.eulerAngles.y, 0f);
                     BoundsOf(m.gameObject, out b);
                     Vector3 offset = m.transform.position - new Vector3(b.center.x, b.min.y, b.center.z);
                     m.Teleport(hit.point + offset + Vector3.up * 0.004f, m.transform.rotation);
@@ -272,16 +304,25 @@ namespace NightPages
             if (m.Heavy) want = transform.position + Forward * 1.15f + Vector3.up * 0.03f;
             else
             {
-                float reach = 1.0f;
+                float reach = vr ? 1.0f : holdReach;
                 RaycastHit wall;
-                if (Physics.Raycast(origin, aim, out wall, reach + 0.25f, ~0, QueryTriggerInteraction.Ignore)) reach = Mathf.Max(0.35f, wall.distance - 0.25f);
+                if (Physics.Raycast(origin, aim, out wall, reach + 0.25f, ~0, QueryTriggerInteraction.Ignore)) reach = Mathf.Max(0.3f, wall.distance - 0.25f);
                 want = origin + aim * reach - Vector3.up * 0.25f;
             }
             m.transform.position = Vector3.Lerp(m.transform.position, want, 1f - Mathf.Exp(-dt * 14f));
-            if (!m.Heavy) m.transform.rotation = Quaternion.Slerp(m.transform.rotation, Quaternion.Euler(hands != null && !vr ? hands.pourTilt * 80f : 0f, transform.eulerAngles.y + 180f, 0f), dt * 6f);
+            if (!m.Heavy)
+            {
+                // Facing you as you carry it, turned however you've turned it, tipped if you're pouring.
+                float tilt = hands != null && !vr ? hands.pourTilt * 80f : 0f;
+                Quaternion held = Quaternion.Euler(0f, transform.eulerAngles.y, 0f) * (vr ? Quaternion.identity : holdTurn) * Quaternion.Euler(0f, 180f, 0f) * Quaternion.Euler(tilt, 0f, 0f);
+                m.transform.rotation = Quaternion.Slerp(m.transform.rotation, held, dt * (In.Held(Btn.Turn) ? 14f : 6f));
+            }
         }
 
         Vector3 scrub;
+        /// <summary>How far out you're holding what you carry (the mouse wheel), and how you've turned it (middle mouse).</summary>
+        float holdReach = 1.0f;
+        Quaternion holdTurn = Quaternion.identity;
 
         /// <summary>The place ahead that wants what you're carrying (the rack, the stove, the bin), if any.</summary>
         Spot SpotAhead(bool vr)
@@ -338,6 +379,18 @@ namespace NightPages
                     Vector2 look = In.Look * 2.2f;
                     // Working with your hands (scrubbing, turning a key, pouring): the mouse is doing the work, not looking.
                     if (Hands.I != null && Hands.I.Busy) look *= 0.12f;
+                    // Holding something light: the wheel brings it nearer or holds it further out, and with the middle
+                    // button held the mouse turns it in your hands instead of turning your head.
+                    if (carrying != null && !carrying.Heavy)
+                    {
+                        float wheel = In.Scroll;
+                        if (wheel != 0f) holdReach = Mathf.Clamp(holdReach + wheel * 0.12f, 0.4f, 2.2f);
+                        if (In.Held(Btn.Turn))
+                        {
+                            holdTurn = Quaternion.AngleAxis(look.x * 1.6f, Vector3.up) * Quaternion.AngleAxis(look.y * 1.6f, Vector3.right) * holdTurn;
+                            look = Vector2.zero;
+                        }
+                    }
                     if (holding != null)
                     {
                         // Your hand is on the handle: the mouse swings the door (forward pushes, back pulls) and the view only drifts.
@@ -394,8 +447,10 @@ namespace NightPages
                     Carry(vr, dt);
                     var spot = canAct && !carrying.Heavy ? SpotAhead(vr) : null;
                     string put = spot != null ? "[E]  " + spot.verb : "[E]  Put it down";
-                    if (hud != null) hud.prompt = hp != null ? hp + "\n" + put : put;
-                    if (canAct && Time.frameCount != pickedFrame && In.Down(Btn.Interact))
+                    if (!vr && !carrying.Heavy) put += "     [Right mouse]  Throw\n[Wheel]  Nearer / further     [Hold middle mouse]  Turn it";
+                    if (canAct && !vr && !carrying.Heavy && In.Down(Btn.Throw)) Throw();
+                    else if (hud != null) hud.prompt = hp != null ? hp + "\n" + put : put;
+                    if (carrying != null && canAct && Time.frameCount != pickedFrame && In.Down(Btn.Interact))
                     {
                         if (spot != null) { var m = carrying; carrying = null; m.SetHeld(false); spot.Place(m); }
                         else Drop();

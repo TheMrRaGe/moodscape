@@ -42,7 +42,8 @@ namespace NightPages
             {
                 player.frozen = true;
                 hud.fade = hud.fadeTarget = 0f;
-                yield return HouseStills(summary);
+                if (StudioMess) yield return MessStills(summary);
+                else yield return HouseStills(summary);
                 yield break;
             }
             BuildStudio();
