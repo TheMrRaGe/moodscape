@@ -22,9 +22,83 @@ namespace NightPages
         float demoStuck, demoBest = float.MaxValue, demoSideUntil;
         Vector3 demoGoal, demoSide;
 
+        // ---------------------------------------------------------------- doors, by hand
+
+        Door demoDoor;
+        float demoDoorAt, demoDoorBest;
+        int demoDoorPhase, demoDoorsOpened;
+        readonly System.Collections.Generic.Dictionary<Door, float> demoDoorDone = new System.Collections.Generic.Dictionary<Door, float>();
+
+        System.Collections.Generic.IEnumerable<Door> DemoDoorsAround()
+        {
+            if (phase == Phase.Dream && dream.Maze != null) return dream.Maze.DoorsNear(player.transform.position, 2.2f);
+            return house.doors;
+        }
+
+        // A shut (or nearly shut) door just ahead: the demo stops and opens it by hand, slowly, the way a player
+        // should: takes the handle, pushes (or pulls) it a little at a time, looks through the gap, then lets go.
+        bool DemoDoorStep(Vector3 goal)
+        {
+            float now = Time.time, dt = Time.deltaTime;
+            Vector3 pp = player.transform.position;
+            if (demoDoor == null)
+            {
+                Vector3 fwd = Vis.Flat(goal - pp).normalized;
+                foreach (var d in DemoDoorsAround())
+                {
+                    if (d == null || !d.gameObject.activeInHierarchy || d.Angle > 45f) continue;
+                    Vector3 to = d.Middle - pp; to.y = 0f;
+                    float done;
+                    if (to.magnitude > 1.45f || Vector3.Dot(fwd, to.normalized) < 0.45f || (demoDoorDone.TryGetValue(d, out done) && now - done < 25f)) continue;
+                    demoDoor = d; demoDoorAt = now; demoDoorPhase = 0; demoDoorBest = d.Angle;
+                    demoDoorsOpened++;
+                    if (demoDoorsOpened <= 8) Log("demo: opening a door by hand, slowly, at frame " + filmFrames);
+                    break;
+                }
+                if (demoDoor == null) return false;
+            }
+            var door = demoDoor;
+            float t = now - demoDoorAt;
+            Vector3 eye = player.cam.transform.position;
+            switch (demoDoorPhase)
+            {
+                case 0:     // reach for the handle
+                    player.Aim(Vector3.Lerp(door.Middle + Vector3.up * -0.05f, door.HingePos + (door.Middle - door.HingePos) * 1.8f + Vector3.up * 1.0f, 0.5f));
+                    if (t > 0.7f) { door.Grab(); demoDoorPhase = 1; demoDoorAt = now; }
+                    break;
+                case 1:     // push it, slowly; if it won't go, it opens the other way: pull
+                case 2:
+                {
+                    float rate = demoDoorPhase == 1 ? 1f : -1f;
+                    door.Drag(rate * (door.Openness < 0.4f ? 12f : 30f) * dt / 3.6f, eye, dt);
+                    player.Aim(door.Middle + Vis.Flat(door.Middle - eye).normalized * 1.5f + Vector3.up * 0.1f);      // looking through the gap
+                    if (demoDoorPhase == 2) player.WalkToward(pp - Vis.Flat(door.Middle - pp).normalized, 0.4f);
+                    demoDoorBest = Mathf.Max(demoDoorBest, door.Angle);
+                    if (demoDoorPhase == 1 && t > 1.2f && door.Angle < 4f) { demoDoorPhase = 2; demoDoorAt = now; }
+                    if (door.Openness > 0.8f || t > 7.5f) { door.Release(); demoDoorPhase = 3; demoDoorAt = now; }
+                    break;
+                }
+                default:    // a moment, then on
+                    if (t > 0.6f) { demoDoorDone[door] = now; demoDoor = null; }
+                    break;
+            }
+            return true;
+        }
+
+        // Swing an open door shut, hard: a slam that is yours.
+        IEnumerator DemoSlam(Door d)
+        {
+            for (float t = 0f; t < 1.2f; t += Time.deltaTime) { player.Aim(d.Middle + Vector3.up * 0.2f); Frame(); yield return null; }
+            d.Grab();
+            d.Fling(420f);
+            d.Release();
+            for (float t = 0f; t < 1.5f; t += Time.deltaTime) { Frame(); yield return null; }
+        }
+
         // One frame of walking toward a point, stepping round whatever is in the way.
         void DemoWalk(Vector3 goal, float speed)
         {
+            if (DemoDoorStep(goal)) return;
             if ((goal - demoGoal).sqrMagnitude > 0.04f) { demoGoal = goal; demoBest = float.MaxValue; demoStuck = 0f; }
             if (Time.time < demoSideUntil) { player.WalkToward(demoSide, speed); return; }
             float d = player.WalkToward(goal, speed);
@@ -42,6 +116,8 @@ namespace NightPages
         {
             yield return StartRunForTest();
             haunt.paused = true;
+            yield return DemoHouse();
+            haunt.demoForce = false;
             day = 3;
             phase = Phase.Dream;
             dream.Begin(3);
@@ -66,7 +142,8 @@ namespace NightPages
             st.Delay(900f);
             maze.HoldHaunts(900f);
 
-            Log("demo: walking the maze at frame " + filmFrames);
+            dream.ToggleTorch(true);
+            Log("demo: walking the maze, flashlight on, at frame " + filmFrames);
             Vector3 off = maze.FarUnseen(player.transform.position, 3, player.cam);
             for (float t = 0f; t < 14f && on(); t += Time.deltaTime)
             {
@@ -103,7 +180,8 @@ namespace NightPages
                 player.LookPitch(2f);
             }
 
-            string[] order = { "pit", "tall", "squeeze", "flood", "watchers", "sealed", "float", "lightsout", "tilt", "small" };
+            // (The rest of the haunts were filmed in the last demo; three, for the new rooms around them.)
+            string[] order = { "pit", "watchers", "lightsout" };
             foreach (var id in order)
             {
                 if (!on()) break;
@@ -183,8 +261,49 @@ namespace NightPages
                 player.LookPitch(2f);
             }
 
-            // A wave spent hidden, watching.
+            // A door slammed in the quiet: it hears, and comes sooner (then the trap, below).
             if (on())
+            {
+                Door slamDoor = null;
+                for (float t = 0f; t < 40f && on() && slamDoor == null; t += Time.deltaTime)
+                {
+                    clock();
+                    foreach (var d in maze.DoorsNear(player.transform.position, 6f)) if (d.Angle > 30f && Vis.Sees(player.cam, d.Middle)) { slamDoor = d; break; }
+                    if (slamDoor == null) DemoWalk(maze.GuideTo(player.transform.position, maze.FarUnseen(player.transform.position, 2, player.cam)), 2.4f);
+                    Frame();
+                    yield return null;
+                }
+                if (slamDoor != null)
+                {
+                    st.Delay(0f);
+                    st.Delay(60f);                        // resting; the slam should bring it sooner
+                    for (float t = 0f; t < 6f && on() && Vis.Level(slamDoor.Middle - player.transform.position).magnitude > 1.3f; t += Time.deltaTime) { DemoWalk(slamDoor.Middle, 2f); Frame(); yield return null; }
+                    Log("demo: slamming a door in the quiet, at frame " + filmFrames);
+                    yield return DemoSlam(slamDoor);
+                    for (float t = 0f; t < 25f && on() && st.state == MazeStalker.State.Calm; t += Time.deltaTime) { clock(); player.Turn(15f * Time.deltaTime); Frame(); yield return null; }
+                    Log("demo: " + (st.state != MazeStalker.State.Calm ? "it heard, and came early: " + st.state + " at frame " + filmFrames : "it didn't come"));
+                    for (float t = 0f; t < 35f && on() && dreamDeaths == deaths; t += Time.deltaTime)
+                    {
+                        clock();
+                        if (st.It != null) player.Aim(st.It.transform.position + Vector3.up);
+                        else player.Turn(20f * Time.deltaTime);
+                        if (st.It != null && Vis.Level(st.It.transform.position - player.transform.position).magnitude < 2.5f) DemoWalk(maze.Guide(player.transform.position), 2.6f);
+                        if (st.state == MazeStalker.State.Calm && t > 5f) break;
+                        Frame();
+                        yield return null;
+                    }
+                }
+                else Log("demo: no open door near enough to slam");
+                if (dreamDeaths > deaths)
+                {
+                    Log("demo: caught (" + lastDreamDeath + ") at frame " + filmFrames);
+                    for (float t = 0f; t < 12f; t += Time.deltaTime) { Frame(); yield return null; if (dream.active && dream.Maze != null && dream.Maze != maze && !busy && t > 7f) break; }
+                    maze = dream.Maze; st = dream.Stalker; deaths = dreamDeaths;
+                }
+            }
+
+            // (Filmed in the last demo: the wave sat out in hiding, and the crawling wave in the open.)
+            if (false)
             {
                 Log("demo: a wave, to be sat out in hiding, at frame " + filmFrames);
                 st.Delay(0f);
@@ -227,7 +346,7 @@ namespace NightPages
             }
 
             // A wave in the open: see it come, run, and be caught.
-            if (on())
+            if (false)
             {
                 // (First the last one has to have gone.)
                 for (float t = 0f; t < 40f && on() && (st.It != null || st.state != MazeStalker.State.Calm); t += Time.deltaTime) { clock(); player.Turn(20f * Time.deltaTime); Frame(); yield return null; }
@@ -263,6 +382,42 @@ namespace NightPages
                 Log("demo: caught (" + lastDreamDeath + ") at frame " + filmFrames);
                 for (float t = 0f; t < 12f; t += Time.deltaTime) { Frame(); yield return null; if (dream.active && dream.Maze != null && dream.Maze != maze && !busy && t > 7f) break; }
                 maze = dream.Maze; st = dream.Stalker; deaths = dreamDeaths;
+            }
+            // A trap it learned: by now it knows where you like to hide (the demo makes it a habit), and one of
+            // them has it waiting inside. Listen at the door: it breathes. The demo goes in anyway.
+            if (maze != null && on())
+            {
+                for (float t = 0f; t < 30f && on() && (st.It != null || st.state != MazeStalker.State.Calm); t += Time.deltaTime) { clock(); Frame(); yield return null; }
+                foreach (var kind in new[] { "locker", "cabinet" }) Habits.Use(this, "hide:" + kind, kind == "locker" ? 6f : 1f);
+                Log("demo: habits now: " + Habits.Describe(this));
+                st.Delay(0f);
+                st.ForceWave();
+                // (The trap is set as it arrives, after the three knocks.)
+                for (float t = 0f; t < 9f && (st.state == MazeStalker.State.Calm || st.state == MazeStalker.State.Warning); t += Time.deltaTime) { clock(); Frame(); yield return null; }
+                var trap = st.TrapSpot;
+                Log("demo: " + (trap != null ? "a learned trap: a " + trap.what + " near here has it inside, at frame " + filmFrames : "no trap could be set here"));
+                for (float t = 0f; trap != null && t < 60f && on() && dreamDeaths == deaths; t += Time.deltaTime)
+                {
+                    clock();
+                    Vector3 pp = player.transform.position;
+                    if (Vis.Level(trap.outside - pp).magnitude > 0.6f) DemoWalk(maze.GuideTo(pp, trap.outside), 3.0f);
+                    else if (st.Hidden == null)
+                    {
+                        // Stand at the door a moment, listening, then go in.
+                        player.Aim(trap.inside + Vector3.up * 1.2f);
+                        for (float w = 0f; w < 2.5f; w += Time.deltaTime) { Frame(); yield return null; }
+                        Log("demo: into the " + trap.what + " at frame " + filmFrames);
+                        st.Hide(trap);
+                    }
+                    Frame();
+                    yield return null;
+                }
+                if (dreamDeaths > deaths)
+                {
+                    Log("demo: trapped (" + lastDreamDeath + "); traps sprung so far " + Habits.trapsSprung + ", at frame " + filmFrames);
+                    for (float t = 0f; t < 12f; t += Time.deltaTime) { Frame(); yield return null; if (dream.active && dream.Maze != null && dream.Maze != maze && !busy && t > 7f) break; }
+                    maze = dream.Maze; st = dream.Stalker; deaths = dreamDeaths;
+                }
             }
             if (maze != null && on())
             {

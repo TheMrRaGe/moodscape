@@ -36,6 +36,14 @@ namespace NightPages
         Material paintMat;
         DreamMaze maze;
         MazeStalker stalker;
+
+        // The flashlight (in the maze): [Q] on and off. It runs down; batteries lie about in the rooms. It shows you
+        // the dark rooms, and it shows you to it: with it on, it can see you from much further off in the dark.
+        Light torch;
+        public bool TorchOn { get; private set; }
+        public float Battery { get; private set; }
+        public int batteriesFound;
+        const float BatterySeconds = 95f;
         float deadline, nightLength, timerShown;
         int warned;
         Texture2D fallback;
@@ -131,12 +139,28 @@ namespace NightPages
             hx = hz = 400f; ceil = DreamMaze.H; roofed = true;
             int size = day <= 2 ? 4 : day <= 4 ? 5 : 6;
             maze = new DreamMaze(g, root, size, day, Random.Range(1, 1000000), paintMat);
+            maze.onBattery = () => { Battery = Mathf.Min(1f, Battery + 0.45f); batteriesFound++; Sfx.Ui("click", 0.7f, 1.3f); g.hud.Say("Batteries. " + Mathf.RoundToInt(Battery * 100f) + "%.", 2f); };
+            if (torch == null)
+            {
+                torch = new GameObject("Flashlight").AddComponent<Light>();
+                torch.type = LightType.Spot;
+                torch.spotAngle = 52f; torch.innerSpotAngle = 22f;
+                torch.range = 15f; torch.intensity = 2.4f;
+                torch.color = new Color(1f, 0.94f, 0.82f);
+                torch.shadows = LightShadows.Soft;
+            }
+            torch.transform.SetParent(g.player.cam.transform, false);
+            torch.transform.localPosition = new Vector3(0.18f, -0.15f, 0.1f);
+            Battery = Mathf.Max(Battery, 0.6f);         // (it keeps what it had from the last night, never less than this)
+            TorchOn = false;
+            torch.enabled = false;
             // Hard, not impossible: enough night to cross it twice over, not enough to see all of it.
             nightLength = (60f + size * size * 4.5f) * 1.3f;       // (the extra is for time spent hiding from it)
             QualitySettings.pixelLightCount = Mathf.Max(QualitySettings.pixelLightCount, 8);      // the room bulbs near you all count
             stalker = new MazeStalker(g, maze, dyn, day, Origin.y);
             stalker.onCatch = Die;
             maze.onHide = stalker.Hide;
+            maze.onBait = () => { stalker.Delay(0f); stalker.ForceWave(); maze.ForceHaunt("lightsout", PlayerPos, Cam); };
             deadline = Time.time + nightLength;
             warned = 0;
             timerShown = -1f;
@@ -157,6 +181,8 @@ namespace NightPages
             active = false;
             if (stalker != null) stalker.Cleanup();
             stalker = null;
+            TorchOn = false;
+            if (torch != null) torch.enabled = false;
             if (maze != null) maze.Destroy();
             maze = null;
             g.fear.onApply = null;
@@ -646,6 +672,7 @@ namespace NightPages
         void UpdateMaze(float now, Vector3 pp)
         {
             if (ending) return;
+            UpdateTorch(now);
             float left = deadline - now;
             maze.Tick(pp, Cam, Mathf.Clamp01(left / nightLength));
             // The dream's own haunts: more of them, sooner, while it is toying with you.
@@ -680,6 +707,32 @@ namespace NightPages
             }
         }
 
+        public void ToggleTorch(bool? on = null)
+        {
+            bool want = on ?? !TorchOn;
+            if (want && Battery <= 0.001f) { Sfx.Ui("click", 0.5f, 0.7f); g.hud.Say("Dead. Find batteries.", 2f); want = false; }
+            if (want != TorchOn) Sfx.Ui("click", 0.55f, want ? 1.15f : 0.9f);
+            TorchOn = want;
+            if (torch != null) torch.enabled = want;
+        }
+
+        void UpdateTorch(float now)
+        {
+            if (torch == null) return;
+            bool hidden = stalker != null && stalker.Hidden != null;
+            if (!hidden && g.hud.modal == Modal.None && In.Down(Btn.Flashlight)) ToggleTorch();
+            if (hidden && TorchOn) ToggleTorch(false);                       // (you'd turn it off in there)
+            if (!TorchOn) return;
+            Battery = Mathf.Max(0f, Battery - Time.deltaTime / BatterySeconds);
+            // Weak batteries: it dims and stutters.
+            float k = Battery < 0.25f ? Battery / 0.25f : 1f;
+            float flick = Battery < 0.2f && Mathf.PerlinNoise(now * 7f, 1.3f) < 0.35f ? 0.15f : 1f;
+            torch.intensity = 2.4f * Mathf.Lerp(0.35f, 1f, k) * flick;
+            torch.range = Mathf.Lerp(7f, 15f, k);
+            if (maze != null && maze.Blackout) torch.intensity *= 0.4f + 0.6f * Mathf.PerlinNoise(now * 13f, 7f);
+            if (Battery <= 0f) { ToggleTorch(false); g.hud.Say("The flashlight's dead.", 2.5f); }
+        }
+
         void UpdateLight(float now, Vector3 pp)
         {
             int mode = Cur[FearEngine.Light];
@@ -698,7 +751,8 @@ namespace NightPages
             {
                 // Indoors and close: you see the room you're in and a little of the next. In the last half-minute the light goes bad.
                 // You carry very little light: the lit rooms are lit by their own bulbs, the dark ones are dark.
-                range = 7f; intensity = Mathf.Clamp(intensity, 0.45f, 1.0f);
+                // (With the flashlight, the glow round you is only enough to see your feet; without it, a little more.)
+                range = TorchOn ? 3.2f : 5f; intensity = TorchOn ? 0.18f : Mathf.Clamp(intensity, 0.3f, 0.6f);
                 if (maze.Blackout) intensity = 0.12f + 0.25f * Mathf.PerlinNoise(now * 11f, 3f);
                 float left = deadline - now;
                 if (left < 30f) { c = Color.Lerp(new Color(1f, 0.12f, 0.06f), c, Mathf.Clamp01(left / 30f)); intensity *= Mathf.Lerp(0.75f, 1f, Mathf.Clamp01(left / 30f)); }

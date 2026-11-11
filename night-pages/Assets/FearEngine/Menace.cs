@@ -105,5 +105,37 @@ namespace FearCore
         }
 
         public void Clear() { uses.Clear(); level.Clear(); }
+        /// <summary>Drop one habit entirely (it was counted wrongly).</summary>
+        public void Forget(string tactic) { uses.Remove(tactic); level.Remove(tactic); }
+
+        /// <summary>Every habit, for saving between runs: one "name\tuses\tlevel" per line.</summary>
+        public string Save()
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var kv in uses)
+                sb.Append(kv.Key.Replace('\t', ' ').Replace('\n', ' ')).Append('\t').Append(kv.Value.ToString("0.###", CultureInfo.InvariantCulture))
+                  .Append('\t').Append(Level(kv.Key)).Append('\n');
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// What it learned about you in earlier runs. Habits carry over, weaker (`keep` of the count), but a level
+        /// once earned stays one lower at worst: it remembers what you do.
+        /// </summary>
+        public void Load(string text, float keep = 0.6f)
+        {
+            foreach (var line in text.Split('\n'))
+            {
+                var p = line.Split('\t');
+                if (p.Length < 3) continue;
+                float u; int lv;
+                if (!float.TryParse(p[1], NumberStyles.Float, CultureInfo.InvariantCulture, out u) || !int.TryParse(p[2], out lv)) continue;
+                uses[p[0]] = u * keep;
+                level[p[0]] = Math.Max(0, lv - 1);
+            }
+        }
+
+        /// <summary>Every habit and how strong it is (for the log, the mind screen and the lore).</summary>
+        public IEnumerable<KeyValuePair<string, float>> All() { return uses; }
     }
 }

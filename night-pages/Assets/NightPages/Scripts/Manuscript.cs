@@ -51,7 +51,13 @@ namespace NightPages
             written.Clear();
             dreamLines = new string[GameDirector.Days + 1];
             warnedRewrite = false;
-            days = new[]
+            days = g.job != null ? g.job.Passages(this) : WriterDays();
+        }
+
+        /// <summary>The novel's passages (the writer's job).</summary>
+        public Passage[][] WriterDays()
+        {
+            return new[]
             {
                 new[]
                 {
@@ -141,15 +147,55 @@ namespace NightPages
             };
         }
 
+        /// <summary>Which of today's pieces of work is next (0, 1; 2 once the day's work is done).</summary>
+        public int Cur { get { return cur; } }
+        public int CurDay { get { return curDay; } }
+        public Passage PassageAt(int day, int passage)
+        {
+            var d = Day(day);
+            return passage >= 0 && passage < d.Length ? d[passage] : null;
+        }
+
+        /// <summary>A new day: nothing written yet today.</summary>
+        public void NewDay(int day) { curDay = day; cur = 0; }
+
+        /// <summary>Open the page again for the next piece of today's work (jobs that do one at a time).</summary>
+        public void Resume()
+        {
+            if (cur >= Day(curDay).Length) return;
+            g.player.frozen = true;
+            g.hud.Open(Modal.Writing);
+            Show();
+        }
+
+        /// <summary>Bed with the day's work not done: what's left of it never gets done.</summary>
+        public void SkipRest()
+        {
+            bool any = false;
+            while (cur < Day(curDay).Length) { written.Add(new Entry { day = curDay, passage = cur, option = -1 }); g.tagAway++; cur++; any = true; }
+            if (any) g.Shake(0.04f, "the day's work left undone");
+        }
+
+        /// <summary>A piece of work that never got done (a call nobody answered): counts as looking away.</summary>
+        public void Skip()
+        {
+            if (cur >= Day(curDay).Length) return;
+            written.Add(new Entry { day = curDay, passage = cur, option = -1 });
+            g.tagAway++;
+            g.Shake(0.03f, "let a piece of the day's work go undone");
+            cur++;
+            if (cur >= Day(curDay).Length) g.OnChapterDone();
+        }
+
         Passage[] Day(int day) { return days[(day - 1) % days.Length]; }
 
         public bool Writing { get { return g.hud.modal == Modal.Writing; } }
 
         public void Begin(int day, string dreamLine)
         {
-            curDay = day;
-            cur = 0;
-            dreamLines[day] = dreamLine;
+            if (curDay != day) { curDay = day; cur = 0; }
+            if (cur == 0) dreamLines[day] = dreamLine;
+            if (cur >= Day(day).Length) return;
             g.player.frozen = true;
             g.hud.Open(Modal.Writing);
             Show();
@@ -158,9 +204,10 @@ namespace NightPages
         void Show()
         {
             var p = Day(curDay)[cur];
-            g.hud.header = "Chapter " + curDay;
-            g.hud.body = ChapterText(curDay, false);
-            g.hud.footer = p.ask;
+            g.hud.header = g.job != null ? g.job.Header(curDay, cur) : "Chapter " + curDay;
+            string extra = g.job != null ? g.job.Extra(curDay, cur) : null;
+            g.hud.body = ChapterText(curDay, false) + (extra != null ? extra + "\n\n" : "");
+            g.hud.footer = p.ask + (g.job != null && g.job.FooterExtra != null ? "   <size=20>" + g.job.FooterExtra + "</size>" : "");
             var opts = new string[p.options.Length];
             for (int i = 0; i < opts.Length; i++) opts[i] = p.options[i].text;
             g.hud.options = opts;
@@ -169,6 +216,7 @@ namespace NightPages
         public void HandleInput()
         {
             if (g.hud.Fresh) return;
+            if (g.job != null) g.job.PageInput();
             int pick = In.Choice();
             if (pick >= 0) Choose(pick);
         }
@@ -201,16 +249,24 @@ namespace NightPages
                     g.hud.Say("You don't remember deciding to write that.");
                     break;
             }
+            if (g.job != null) g.job.Chose(curDay, cur, line);
+            if (DayClock.I != null) DayClock.I.Advance(g.job != null ? g.job.MinutesPer : 50f);
             cur++;
             if (cur >= Day(curDay).Length) g.OnChapterDone();
+            else if (g.job != null && g.job.OneAtATime) { g.hud.Close(); g.player.frozen = false; }
             else Show();
         }
 
-        /// <summary>Debug skip: writes the chapter with random choices.</summary>
+        /// <summary>Debug skip and test runs: does the rest of today's work with random choices.</summary>
         public void AutoWrite(int day)
         {
-            if (!Writing) Begin(day, null);
-            while (Writing) Choose(g.rng.Next(3));
+            if (curDay != day) { curDay = day; cur = 0; }
+            int guard = 0;
+            while (cur < Day(curDay).Length && guard++ < 10)
+            {
+                if (!Writing) { g.player.frozen = true; g.hud.Open(Modal.Writing); Show(); }
+                Choose(g.rng.Next(3));
+            }
         }
 
         string ChapterText(int day, bool unreliable)
@@ -221,6 +277,7 @@ namespace NightPages
             {
                 if (e.day != day) continue;
                 var p = Day(day)[e.passage];
+                if (e.option < 0) { sb.Append("<i>(nothing)</i>\n\n"); continue; }
                 int shown = e.option;
                 // Low Grip: some lines from earlier days are no longer the ones you chose.
                 if (unreliable && (e.day * 7 + e.passage * 3) % 3 == g.rewriteSeed % 3) shown = (e.option + 1) % p.options.Length;
@@ -246,7 +303,7 @@ namespace NightPages
             {
                 string text = ChapterText(d, slipping && d < g.day);
                 if (text.Length == 0) continue;
-                sb.Append("<b>Chapter ").Append(d).Append("</b>\n").Append(text);
+                sb.Append("<b>").Append(g.job != null ? g.job.Header(d, 0) : "Chapter " + d).Append("</b>\n").Append(text);
             }
             if (!string.IsNullOrEmpty(foreign)) sb.Append("<i>").Append(foreign).Append("</i>\n\n");
             return sb.ToString();

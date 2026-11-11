@@ -38,6 +38,10 @@ namespace NightPages
         bool sawEnter, saidHide, saidOut, wasSeeing;
         readonly List<DreamMaze.HideSpot> toCheck = new List<DreamMaze.HideSpot>();
         DreamMaze.HideSpot checking;
+        // The trap for a habitual hider: one of their favourite kind of hiding place, with it already inside.
+        DreamMaze.HideSpot trapSpot;
+        public DreamMaze.HideSpot TrapSpot { get { return trapSpot; } }
+        AudioSource trapBreath;
 
         public MazeStalker(GameDirector director, DreamMaze maze, Transform dyn, int day, float floorY)
         {
@@ -47,6 +51,55 @@ namespace NightPages
             this.day = day;
             this.floorY = floorY;
             until = Time.time + 22f;                     // the first wave never comes at once
+            Noise.Made += Heard;
+        }
+
+        // ---------------------------------------------------------------- hearing
+
+        // A slammed door, something knocked over: it has good ears. Resting, it comes sooner; hunting, it comes to
+        // the noise; leaving, a loud enough one turns it round.
+        void Heard(Vector3 at, float loud, string what)
+        {
+            float now = Time.time;
+            if (loud < 0.3f) return;
+            switch (state)
+            {
+                case State.Calm:
+                    if (loud >= 0.5f)
+                    {
+                        float soon = now + Mathf.Lerp(9f, 2.5f, loud);
+                        if (soon < until) { until = soon; g.Log("dream maze: it heard that (" + what + "); it's coming sooner"); }
+                    }
+                    break;
+                case State.Hunt:
+                case State.Search:
+                case State.Toy:
+                    if (It == null || Vis.Level(at - Pos).magnitude > Noise.Reach(loud)) return;
+                    lastKnown = at; lastKnown.y = floorY;
+                    knowsUntil = Mathf.Max(knowsUntil, now + 1.5f);
+                    if (state != State.Hunt) { checking = null; toCheck.Clear(); Go(State.Hunt, "heard that (" + what + ") and is coming to it"); }
+                    else g.Log("dream maze: it heard that (" + what + ")");
+                    huntEnds = Mathf.Max(huntEnds, now + 8f);
+                    break;
+                case State.Leave:
+                    if (It == null || loud < 0.85f || Vis.Level(at - Pos).magnitude > Noise.Reach(loud)) return;
+                    lastKnown = at; lastKnown.y = floorY;
+                    huntEnds = now + 12f;
+                    Go(State.Hunt, "was leaving, but heard that (" + what + ") and turned back");
+                    break;
+            }
+        }
+
+        // A shut door in its way: it doesn't open doors, it comes through them.
+        readonly HashSet<Door> burst = new HashSet<Door>();
+        void Doors()
+        {
+            foreach (var d in maze.DoorsNear(Pos, 1.3f))
+            {
+                if (d.Angle > 60f || d.Speed > 100f) continue;
+                d.Burst(Pos, 420f);
+                if (burst.Add(d)) g.Log("dream maze: it came through a door rather than open it");
+            }
         }
 
         // Where it is, on the floor plan. (When it's up a wall or across the ceiling, this is the spot on the floor
@@ -75,6 +128,19 @@ namespace NightPages
         {
             if (Hidden != null || spot == null) return;
             Vector3 pp = g.player.transform.position;
+            Habits.Use(g, "hide:" + spot.what);
+            if (spot == trapSpot)
+            {
+                // It was in there. It was waiting for you to choose this one.
+                Habits.trapsSprung++;
+                g.Log("habits: you always hide in a " + spot.what + "; this one already had it inside");
+                trapSpot = null;
+                if (trapBreath != null) Object.Destroy(trapBreath.gameObject);
+                Sfx.At("slam", spot.inside + Vector3.up, 1f, 0.6f);
+                Look.Kick(1f);
+                if (onCatch != null) onCatch("it was already inside");
+                return;
+            }
             if (spot.under && !maze.Dark(spot.inside) && !saidOut) { saidOut = true; g.hud.Say("Under a table, with the light on. It would see you.", 3.5f); }
             // Did it watch you get in?
             sawEnter = It != null && (Sees(pp, true) || Time.time - lastSeenAt < 0.7f);
@@ -105,6 +171,9 @@ namespace NightPages
 
         public void Cleanup()
         {
+            Noise.Made -= Heard;
+            if (trapBreath != null) Object.Destroy(trapBreath.gameObject);
+            trapSpot = null;
             if (Hidden != null) { g.player.Crouch(false); g.player.speedMul = 1f; Hidden = null; }
             if (It != null) Object.Destroy(It.gameObject);
             It = null;
@@ -117,7 +186,9 @@ namespace NightPages
         {
             if (It == null) return false;
             bool dark = maze.Dark(pp);
-            float range = dark ? 5.5f : 17f;
+            bool torch = g.dream.TorchOn;
+            // In the dark it sees you only close up, unless you're carrying a light: then it sees the light.
+            float range = dark ? (torch ? 16f : 5.5f) : 17f;
             float height = 1.4f;
             if (Hidden != null && !ignoreHiding)
             {
@@ -166,6 +237,7 @@ namespace NightPages
                 p.y = floorY;
                 It.transform.position = p;
                 It.transform.rotation = Quaternion.Slerp(It.transform.rotation, Quaternion.LookRotation(d.normalized), dt * 7f);
+                Doors();
                 if (Time.time > stepAt)
                 {
                     stepAt = Time.time + Mathf.Clamp(1.5f / Mathf.Max(0.5f, speed), 0.32f, 0.9f);
@@ -282,6 +354,18 @@ namespace NightPages
             {
                 if (now < until) return;
                 waves++;
+                // You hide in the same kind of place every time: one of them, nearby, has it already. (Listen: it breathes.)
+                string fav = Habits.Most(g, "hide:", 2f);
+                if (fav != null && Habits.Level(g, fav) >= 1 && trapSpot == null)
+                {
+                    trapSpot = maze.HideOfKind(pp, fav.Substring(5), 2);
+                    if (trapSpot != null)
+                    {
+                        trapBreath = Sfx.Loop("breath", trapSpot.root, 0.35f, true, 0.7f);
+                        if (trapBreath != null) { trapBreath.transform.localPosition = new Vector3(0f, 1.3f, 0f); trapBreath.maxDistance = 6f; }
+                        g.Log("habits: you always hide in a " + fav.Substring(5) + "; one of them, near here, is waiting for you");
+                    }
+                }
                 It = Monster.Create(dyn, forceLook ?? g.fear.Look());
                 forceLook = null;
                 Vector3 at = maze.FarUnseen(pp, 3, cam);
@@ -340,6 +424,12 @@ namespace NightPages
                 case State.Hunt:
                 {
                     if (!sees && now < knowsUntil && Hidden == null) lastKnown = pp;
+                    // You run, every time: it goes where you're running to, not where you are.
+                    if (sees && Habits.Level(g, "runs") >= 2 && Hidden == null)
+                    {
+                        Vector3 v = g.player.velocity; v.y = 0f;
+                        if (v.magnitude > 3f) lastKnown = pp + v.normalized * Mathf.Min(4f, v.magnitude * 1.2f);
+                    }
                     float left = Move(lastKnown, sees || now - lastSeenAt < 2f ? 3.9f : 3.1f, dt);
                     if (sees && dist < 1.15f && surf == 0) { Catch("it reached you"); return; }
                     if (Hidden != null && sawEnter && maze.Rooms(Pos, Hidden.inside) <= 1) { Go(State.Found, "watched you hide, and is coming to get you"); return; }
@@ -359,7 +449,7 @@ namespace NightPages
                     if (Move(goal, 2.2f, dt) < 1.2f)
                     {
                         if (now > huntEnds) BeginLeave(pp, cam);
-                        else goal = maze.RandomPoint(Pos, 5f, 14f, false, cam);
+                        else goal = SearchGoal(cam);
                     }
                     break;
                 }
@@ -434,6 +524,17 @@ namespace NightPages
             }
         }
 
+        // Where to look next. If you're one who stands still in the dark, it looks in the dark rooms first.
+        Vector3 SearchGoal(Camera cam)
+        {
+            if (Habits.Level(g, "freezes") >= 1 && Random.value < 0.65f)
+            {
+                var dark = maze.DarkRoomNear(Pos, 3);
+                if (dark.HasValue) return dark.Value;
+            }
+            return maze.RandomPoint(Pos, 5f, 14f, false, cam);
+        }
+
         void BeginToy(Vector3 pp)
         {
             // Every hiding place in the room it lost you in. If you're in one of them, that one is usually on its list.
@@ -441,6 +542,9 @@ namespace NightPages
             var here = new List<DreamMaze.HideSpot>(maze.HidesIn(lastKnown));
             for (int i = here.Count - 1; i > 0; i--) { int j = Random.Range(0, i + 1); var t = here[i]; here[i] = here[j]; here[j] = t; }
             foreach (var h in here) if (h != Hidden || Random.value < 0.8f) toCheck.Add(h);
+            // It knows where you like to hide: that kind first.
+            string fav = Habits.Most(g, "hide:", 1.5f);
+            if (fav != null) toCheck.Sort((a, b) => (b.what == fav.Substring(5) ? 1 : 0).CompareTo(a.what == fav.Substring(5) ? 1 : 0));
             if (toCheck.Count == 0) { goal = maze.RandomPoint(Pos, 5f, 14f, false, null); Go(State.Search, "has lost you and is looking"); return; }
             checking = null;
             toyed++;

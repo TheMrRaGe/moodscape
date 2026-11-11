@@ -13,7 +13,7 @@ namespace NightPages
     /// </summary>
     public static class Flesh
     {
-        enum Kind { Capsule, Sphere, Box, Cylinder }
+        enum Kind { Capsule, Sphere, Box, Cylinder, RoundCone, Ellipsoid, RoundBox }
 
         class Prim
         {
@@ -23,6 +23,25 @@ namespace NightPages
             public float scale;             // unit-space distance -> metres (smallest axis)
             public Bounds box;              // in rig space, grown by the blend distance
             public float inflate;           // metres added all round (thin parts, so the grid doesn't break them up)
+            // FleshShape parts: measured in metres in the part's own (unscaled) frame.
+            public Vector3 axes = Vector3.one;  // the part's scale, relative to the rig: unit space -> metres along each axis
+            public float r0, r1, halfLen, round, k = 1f;
+            public bool carve;
+        }
+
+        // A FleshShape on the part, if there is one: its kind and measurements.
+        static bool Shaped(Transform t, Transform space, Prim p, ref Kind k)
+        {
+            var s = t.GetComponent<FleshShape>();
+            if (s == null) return false;
+            k = s.kind == FleshShape.K.RoundCone ? Kind.RoundCone : s.kind == FleshShape.K.Ellipsoid ? Kind.Ellipsoid : Kind.RoundBox;
+            float sy = Mathf.Max(0.0001f, space.lossyScale.y);
+            Vector3 ls = t.lossyScale;
+            p.axes = new Vector3(Mathf.Abs(ls.x), Mathf.Abs(ls.y), Mathf.Abs(ls.z)) / sy;
+            p.r0 = s.r0; p.r1 = s.r1; p.halfLen = s.halfLen; p.round = s.round;
+            p.k = Mathf.Max(0.05f, s.blend);
+            p.carve = s.carve;
+            return true;
         }
 
         /// <summary>Small parts that are never melted into the body (eyes, teeth, mouths...).</summary>
@@ -30,7 +49,7 @@ namespace NightPages
 
         static readonly HashSet<string> Detail = new HashSet<string>
         {
-            "Eye", "Tooth", "Needle", "Socket", "Mouth", "Grin", "Nose", "Pompom", "Ruff", "Hole", "Rim", "Crawler", "Collar"
+            "Eye", "Tooth", "Needle", "Socket", "Mouth", "Grin", "Nose", "Pompom", "Ruff", "Hole", "Rim", "Crawler", "Collar", "Seta", "Nail"
         };
 
         /// <summary>
@@ -58,7 +77,6 @@ namespace NightPages
                 var t = r.transform;
                 Vector3 ls = t.lossyScale;
                 float smallest = Mathf.Min(Mathf.Abs(ls.x), Mathf.Min(Mathf.Abs(ls.y), Mathf.Abs(ls.z))) / Mathf.Max(0.0001f, rig.lossyScale.y);
-                if (smallest < cell * 1.3f) continue;          // too thin for the grid: fingers stay as they are
                 var p = new Prim
                 {
                     bone = t,
@@ -66,11 +84,20 @@ namespace NightPages
                     toLocal = t.worldToLocalMatrix * rig.localToWorldMatrix,
                     scale = smallest,
                 };
+                bool shaped = Shaped(t, rig, p, ref p.kind);
+                if (shaped && p.kind == Kind.RoundCone) smallest = Mathf.Min(p.r0, p.r1) * 2f;
+                // Too thin for the grid: an old-style part stays as it is; a shaped part (a claw, a spider's tarsus) is
+                // thickened just enough to come through whole instead of breaking into dashes.
+                if (smallest < cell * 1.3f && !p.carve)
+                {
+                    if (!shaped) continue;
+                    p.inflate = Mathf.Max(0f, cell * 0.75f - smallest * 0.25f);
+                }
                 var b = r.bounds;                              // world space
                 var c = rigFromWorld.MultiplyPoint3x4(b.center);
                 var e = rigFromWorld.MultiplyVector(b.extents);
                 p.box = new Bounds(c, new Vector3(Mathf.Abs(e.x), Mathf.Abs(e.y), Mathf.Abs(e.z)) * 2f);
-                p.box.Expand(blend * 2.5f + cell * 2f);
+                p.box.Expand(blend * 2.5f + cell * 2f + p.inflate * 2f);
                 prims.Add(p);
                 hidden.Add(r);
             }
@@ -89,7 +116,8 @@ namespace NightPages
             var field = new float[nx * ny * nz];
             for (int i = 0; i < field.Length; i++) field[i] = 1f;
 
-            // Melt each primitive into the field, only near itself.
+            // Melt each primitive into the field, only near itself (and then cut the carved ones away).
+            prims.Sort((x, y) => x.carve.CompareTo(y.carve));
             foreach (var p in prims)
             {
                 int x0 = Mathf.Max(0, Mathf.FloorToInt((p.box.min.x - origin.x) / cell)), x1 = Mathf.Min(nx - 1, Mathf.CeilToInt((p.box.max.x - origin.x) / cell));
@@ -101,7 +129,7 @@ namespace NightPages
                         {
                             var q = origin + new Vector3(x * cell, y * cell, z * cell);
                             int i = (z * ny + y) * nx + x;
-                            field[i] = SMin(field[i], Dist(p, q), blend);
+                            field[i] = p.carve ? SMax(field[i], -Dist(p, q), blend * p.k) : SMin(field[i], Dist(p, q), blend * p.k);
                         }
             }
             // Flesh isn't smooth: a little lumpiness, the same pattern every time for the same body.
@@ -135,7 +163,7 @@ namespace NightPages
                 float d1 = float.MaxValue, d2 = float.MaxValue;
                 for (int b = 0; b < prims.Count; b++)
                 {
-                    if (!prims[b].box.Contains(verts[i])) continue;
+                    if (prims[b].carve || !prims[b].box.Contains(verts[i])) continue;
                     float d = Dist(prims[b], verts[i]);
                     if (d < d1) { d2 = d1; b2 = b1; d1 = d; b1 = b; }
                     else if (d < d2) { d2 = d; b2 = b; }
@@ -143,6 +171,7 @@ namespace NightPages
                 if (d1 == float.MaxValue)
                     for (int b = 0; b < prims.Count; b++)
                     {
+                        if (prims[b].carve) continue;
                         float d = Dist(prims[b], verts[i]);
                         if (d < d1) { d1 = d; b1 = b; }
                     }
@@ -247,8 +276,9 @@ namespace NightPages
                 float smallest = Mathf.Min(Mathf.Abs(ls.x), Mathf.Min(Mathf.Abs(ls.y), Mathf.Abs(ls.z))) / sy;
                 // Thin parts (spider legs, long fingers) are thinner than the grid: thicken them just enough to come
                 // through whole, or they'd show up as broken dashes while it changes.
-                float inflate = smallest < cell * 1.6f ? Mathf.Max(0f, cell * 0.8f - smallest * 0.25f) : 0f;
-                var p = new Prim { bone = null, kind = k, toLocal = t.worldToLocalMatrix * space.localToWorldMatrix, scale = smallest, inflate = inflate };
+                var p = new Prim { bone = null, kind = k, toLocal = t.worldToLocalMatrix * space.localToWorldMatrix, scale = smallest };
+                if (Shaped(t, space, p, ref p.kind) && p.kind == Kind.RoundCone) smallest = Mathf.Min(p.r0, p.r1) * 2f;
+                p.inflate = smallest < cell * 1.6f && !p.carve ? Mathf.Max(0f, cell * 0.8f - smallest * 0.25f) : 0f;
                 // Bounds from the primitive's own corners (renderer bounds aren't updated while it's switched off).
                 var corners = new Bounds(spaceFromWorld.MultiplyPoint3x4(t.position), Vector3.zero);
                 for (int c = 0; c < 8; c++)
@@ -267,6 +297,7 @@ namespace NightPages
         {
             var field = new float[nx * ny * nz];
             for (int i = 0; i < field.Length; i++) field[i] = 1f;
+            prims.Sort((x, y) => x.carve.CompareTo(y.carve));
             foreach (var p in prims)
             {
                 int x0 = Mathf.Max(0, Mathf.FloorToInt((p.box.min.x - origin.x) / cell)), x1 = Mathf.Min(nx - 1, Mathf.CeilToInt((p.box.max.x - origin.x) / cell));
@@ -278,7 +309,8 @@ namespace NightPages
                         {
                             var q = origin + new Vector3(x * cell, y * cell, z * cell);
                             int i = (z * ny + y) * nx + x;
-                            field[i] = SMin(field[i], Dist(p, q), blend);
+                            // (Carving is too fine for the grid a change is worked out on: there, the carved parts are skipped.)
+                            if (!p.carve) field[i] = SMin(field[i], Dist(p, q), blend * p.k);
                         }
             }
             return field;
@@ -481,6 +513,25 @@ namespace NightPages
             float d;
             switch (p.kind)
             {
+                case Kind.RoundCone:
+                {
+                    Vector3 m = Vector3.Scale(l, p.axes);
+                    return RoundCone(m, p.halfLen, p.r0, p.r1) - p.inflate;
+                }
+                case Kind.Ellipsoid:
+                {
+                    Vector3 m = Vector3.Scale(l, p.axes), r = p.axes * 0.5f;
+                    float k0 = new Vector3(m.x / r.x, m.y / r.y, m.z / r.z).magnitude;
+                    float k1 = new Vector3(m.x / (r.x * r.x), m.y / (r.y * r.y), m.z / (r.z * r.z)).magnitude;
+                    return (k1 > 1e-6f ? k0 * (k0 - 1f) / k1 : -Mathf.Min(r.x, Mathf.Min(r.y, r.z))) - p.inflate;
+                }
+                case Kind.RoundBox:
+                {
+                    Vector3 m = Vector3.Scale(l, p.axes), b = p.axes * 0.5f - Vector3.one * p.round;
+                    Vector3 a = new Vector3(Mathf.Abs(m.x) - b.x, Mathf.Abs(m.y) - b.y, Mathf.Abs(m.z) - b.z);
+                    Vector3 o = new Vector3(Mathf.Max(a.x, 0f), Mathf.Max(a.y, 0f), Mathf.Max(a.z, 0f));
+                    return o.magnitude + Mathf.Min(Mathf.Max(a.x, Mathf.Max(a.y, a.z)), 0f) - p.round - p.inflate;
+                }
                 case Kind.Capsule:
                     l.y -= Mathf.Clamp(l.y, -0.5f, 0.5f);
                     d = l.magnitude - 0.5f;
@@ -503,6 +554,23 @@ namespace NightPages
                 }
             }
             return d * p.scale - p.inflate;
+        }
+
+        // A cone with rounded ends along y, from -h (radius r0) to +h (radius r1): metres. (Inigo Quilez's round cone.)
+        static float RoundCone(Vector3 p, float h, float r0, float r1)
+        {
+            Vector3 a = new Vector3(0f, -h, 0f), ba = new Vector3(0f, 2f * h, 0f);
+            float l2 = Vector3.Dot(ba, ba);
+            if (l2 < 1e-8f) return p.magnitude - Mathf.Max(r0, r1);
+            float rr = r0 - r1, a2 = l2 - rr * rr, il2 = 1f / l2;
+            Vector3 pa = p - a;
+            float y = Vector3.Dot(pa, ba), z = y - l2;
+            Vector3 w = pa * l2 - ba * y;
+            float x2 = Vector3.Dot(w, w), y2 = y * y * l2, z2 = z * z * l2;
+            float k = Mathf.Sign(rr) * rr * rr * x2;
+            if (Mathf.Sign(z) * a2 * z2 > k) return Mathf.Sqrt(x2 + z2) * il2 - r1;
+            if (Mathf.Sign(y) * a2 * y2 < k) return Mathf.Sqrt(x2 + y2) * il2 - r0;
+            return (Mathf.Sqrt(x2 * a2 * il2) + y * rr) * il2 - r0;
         }
 
         static Vector3 Gradient(float[] f, Vector3 p, Vector3 origin, float cell, int nx, int ny, int nz)

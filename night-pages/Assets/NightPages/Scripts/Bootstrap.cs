@@ -19,6 +19,10 @@ namespace NightPages
             Build.ResetStatics();
             Monster.ResetStatics();
             WallHands.ResetStatics();
+            Painted.ResetStatics();
+            Habits.ResetStatics();
+            Noise.ResetStatics();
+            Door.ResetStatics();
             DreamMaze.ResetStatics();
             Look.ResetStatics();
             FaceReader.ResetStatics();
@@ -28,6 +32,8 @@ namespace NightPages
             Tour.ResetStatics();
             Reactions.ResetStatics();
             VRRig.ResetStatics();
+            Work.ResetStatics(); Source.ResetStatics(); Spot.ResetStatics(); ClockFace.ResetStatics();
+            House.Switched = null;
             var old = SceneManager.GetActiveScene();
             var fresh = SceneManager.CreateScene("NightPagesRuntime");
             SceneManager.SetActiveScene(fresh);

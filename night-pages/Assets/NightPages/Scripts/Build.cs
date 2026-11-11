@@ -111,10 +111,27 @@ namespace NightPages
             var root = new GameObject(name).transform;
             root.SetParent(parent, false);
             var dark = Mat(new Color(0.015f, 0.015f, 0.02f), 0f, 0f);
-            Prim(PrimitiveType.Capsule, "Body", root, new Vector3(0f, 1.0f, 0f), new Vector3(0.42f, 1.0f, 0.42f), dark, false);
-            Prim(PrimitiveType.Sphere, "Head", root, new Vector3(0f, 2.15f, 0f), new Vector3(0.34f, 0.4f, 0.34f), dark, false);
-            Prim(PrimitiveType.Cube, "ArmL", root, new Vector3(-0.31f, 1.2f, 0f), new Vector3(0.07f, 1.5f, 0.07f), dark, false);
-            Prim(PrimitiveType.Cube, "ArmR", root, new Vector3(0.31f, 1.2f, 0f), new Vector3(0.07f, 1.5f, 0.07f), dark, false);
+            // A person's shape, at a person's height (about 1.78 m): what you'd see standing in a dark room. Head and
+            // neck, the shoulders a little too square, a chest, hips, arms hanging with the elbows just bent, legs.
+            System.Action<string, Vector3, Vector3, Vector3> seg = (n, a, b, s) =>
+            {
+                var g = Prim(PrimitiveType.Capsule, n, root, (a + b) / 2f, new Vector3(s.x, (b - a).magnitude / 2f + s.x * 0.4f, s.z), dark, false);
+                g.transform.localRotation = Quaternion.FromToRotation(Vector3.up, (b - a).normalized);
+            };
+            Prim(PrimitiveType.Sphere, "Head", root, new Vector3(0f, 1.66f, 0.01f), new Vector3(0.19f, 0.24f, 0.22f), dark, false);
+            seg("Neck", new Vector3(0f, 1.5f, -0.01f), new Vector3(0f, 1.58f, 0f), new Vector3(0.11f, 0f, 0.11f));
+            Prim(PrimitiveType.Capsule, "Chest", root, new Vector3(0f, 1.3f, 0f), new Vector3(0.4f, 0.22f, 0.24f), dark, false).transform.localRotation = Quaternion.Euler(0f, 0f, 90f);
+            Prim(PrimitiveType.Capsule, "Body", root, new Vector3(0f, 1.15f, 0f), new Vector3(0.33f, 0.28f, 0.21f), dark, false);
+            Prim(PrimitiveType.Sphere, "Hips", root, new Vector3(0f, 0.93f, 0f), new Vector3(0.36f, 0.22f, 0.23f), dark, false);
+            for (int s = -1; s <= 1; s += 2)
+            {
+                seg("Arm", new Vector3(s * 0.21f, 1.42f, 0f), new Vector3(s * 0.24f, 1.12f, -0.02f), new Vector3(0.095f, 0f, 0.095f));
+                seg("Arm", new Vector3(s * 0.24f, 1.12f, -0.02f), new Vector3(s * 0.23f, 0.86f, 0.04f), new Vector3(0.075f, 0f, 0.075f));
+                Prim(PrimitiveType.Sphere, "Hand", root, new Vector3(s * 0.23f, 0.78f, 0.05f), new Vector3(0.06f, 0.16f, 0.09f), dark, false);
+                seg("Leg", new Vector3(s * 0.09f, 0.88f, 0f), new Vector3(s * 0.1f, 0.47f, 0.02f), new Vector3(0.14f, 0f, 0.14f));
+                seg("Leg", new Vector3(s * 0.1f, 0.47f, 0.02f), new Vector3(s * 0.1f, 0.07f, -0.01f), new Vector3(0.1f, 0f, 0.1f));
+                Prim(PrimitiveType.Sphere, "Foot", root, new Vector3(s * 0.1f, 0.04f, 0.06f), new Vector3(0.09f, 0.08f, 0.24f), dark, false);
+            }
             return root;
         }
     }

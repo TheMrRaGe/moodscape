@@ -193,6 +193,137 @@ namespace NightPages
                 float hz = notes[i] * 0.982f * (1f + 0.004f * Sin(4.5f, t));
                 return env * 0.4f * (Sin(hz, t) + 0.3f * Sin(hz * 2f, t));
             });
+
+            // A hinge, stick-slip: little catches in a train, each ringing the wood and the iron. Loops; Door plays
+            // it at whatever speed the door moves (slower is lower and longer).
+            var catches = new List<float>();
+            for (float at = 0f; at < 2f; )
+            {
+                catches.Add(at);
+                at += 1f / (55f + 35f * Mathf.Sin(at * 2.1f) + 25f * Mathf.PerlinNoise(at * 5f, 1.7f)) * (0.8f + (float)rng.NextDouble() * 0.4f);
+            }
+            int ci = 0;
+            Make("doorcreak", 2f, t =>
+            {
+                while (ci + 1 < catches.Count && catches[ci + 1] <= t) ci++;
+                float s = 0f;
+                for (int k = Mathf.Max(0, ci - 3); k <= ci; k++)
+                {
+                    float d = t - catches[k];
+                    if (d < 0f || d > 0.04f) continue;
+                    s += Mathf.Exp(-d * 140f) * (Sin(720f, d) * 0.6f + Sin(1650f, d) * 0.35f + Sin(380f, d) * 0.4f);
+                }
+                return s * 0.55f * (0.75f + 0.25f * Mathf.PerlinNoise(t * 3f, 4.2f));
+            });
+            // A slipper dragged, then the stick: shuffle-and-thud, a dead man's walk (one stride).
+            lp = 0f;
+            Make("shuffle", 1.1f, t =>
+            {
+                lp += (Noise() - lp) * 0.08f;
+                float drag = t < 0.45f ? Mathf.Sin(Mathf.PI * t / 0.45f) * lp * 1.4f : 0f;
+                return drag + Thump(t, 0.62f, 75f, 30f) * 0.7f + Thump(t, 0.64f, 140f, 60f) * 0.25f;
+            });
+            // Crockery: a stack of plates giving way, shards after.
+            var shards = new List<float>();
+            for (float at = 0.03f; at < 1.4f; at += 0.015f + (float)rng.NextDouble() * 0.09f * (1f + at * 3f)) shards.Add(at);
+            Make("smash", 1.6f, t =>
+            {
+                float s = Thump(t, 0f, 180f, 18f) * 0.5f;
+                foreach (var at in shards)
+                {
+                    float d = t - at;
+                    if (d < 0f || d > 0.05f) continue;
+                    float hz = 2200f + (at * 7919f % 1f) * 2600f;
+                    s += Mathf.Exp(-d * 90f) * Sin(hz, d) * Mathf.Exp(-at * 2f) * 0.6f;
+                }
+                return s + Noise() * Mathf.Exp(-t * 22f) * 0.5f;
+            });
+            // Something small rolling across a worktop, then the soft wet crack of it landing.
+            Make("roll", 1.8f, t =>
+            {
+                float r = t < 1.2f ? (0.2f + 0.2f * Sin(9f, t)) * Mathf.PerlinNoise(t * 60f, 2f) * Noise() : 0f;
+                return r * 0.5f + Thump(t, 1.32f, 120f, 40f) * 0.6f + Noise() * (t > 1.32f ? Mathf.Exp(-(t - 1.32f) * 45f) : 0f) * 0.35f;
+            });
+            // A single knuckle on wood.
+            Make("tap", 0.25f, t => Thump(t, 0f, 210f, 45f) * 0.8f + Noise() * Mathf.Exp(-t * 200f) * 0.3f);
+            // Something heavy dragged over boards.
+            lp = 0f;
+            Make("drag", 1.6f, t =>
+            {
+                lp += (Noise() - lp) * 0.04f;
+                float judder = 0.6f + 0.4f * Mathf.Sign(Sin(17f, t));
+                return lp * judder * Mathf.Sin(Mathf.PI * t / 1.6f) * 2.2f;
+            });
+
+            // ---- the house's daily life (chores, the clock, the jobs)
+
+            // A tap running into a sink: two bands of noise with a slow wobble. Loops.
+            float w1 = 0f, w2 = 0f;
+            Make("water", 3f, t =>
+            {
+                float n = Noise();
+                w1 += (n - w1) * 0.35f; w2 += (w1 - w2) * 0.5f;
+                return (w1 - w2 * 0.7f) * (0.55f + 0.2f * Mathf.PerlinNoise(t * 7f, 0.3f)) * 0.5f;
+            });
+            // A sponge or a brush going over something: a short scratchy swish.
+            lp = 0f;
+            Make("scrub", 0.35f, t => { float n = Noise(); lp += (n - lp) * 0.45f; return (n - lp) * Mathf.Sin(Mathf.PI * t / 0.35f) * 0.45f; });
+            // Pouring: a glug every so often over a thin stream. Loops.
+            lp = 0f;
+            Make("pour", 2f, t =>
+            {
+                lp += (Noise() - lp) * 0.2f;
+                float glug = Mathf.Exp(-((t * 5.3f) % 1f) * 9f) * Sin(240f + 60f * Mathf.Sin(t * 3f), t);
+                return lp * 0.25f + glug * 0.18f;
+            });
+            // The hall clock striking: a struck rod, inharmonic partials ringing down.
+            Make("chime", 3.5f, t =>
+            {
+                float e = Mathf.Exp(-t * 1.3f);
+                return e * 0.3f * (Sin(196f, t) + 0.7f * Sin(196f * 2.76f, t) * Mathf.Exp(-t * 1.5f) + 0.45f * Sin(196f * 5.4f, t) * Mathf.Exp(-t * 3f) + 0.3f * Sin(392.6f, t)) + Noise() * Mathf.Exp(-t * 80f) * 0.2f;
+            });
+            // A kettle coming to the boil: a rumble that grows bubbles. Loops (louder as it heats).
+            lp = 0f;
+            Make("boil", 3f, t =>
+            {
+                lp += (Noise() - lp) * 0.08f;
+                float pop = Mathf.PerlinNoise(t * 40f, 1.1f) > 0.72f ? Noise() * 0.5f : 0f;
+                return lp * 0.6f + pop * 0.3f;
+            });
+            // A match struck: a rasp, then the flare.
+            lp = 0f;
+            Make("strike", 0.9f, t =>
+            {
+                lp += (Noise() - lp) * 0.5f;
+                float rasp = t < 0.12f ? (Noise() - lp) * 0.8f : 0f;
+                float flare = t > 0.1f ? lp * Mathf.Exp(-(t - 0.1f) * 5f) * 0.6f : 0f;
+                return rasp + flare;
+            });
+            // Fire catching: a soft whoomph.
+            lp = 0f;
+            Make("whoosh", 1.2f, t => { lp += (Noise() - lp) * 0.06f; return lp * Mathf.Sin(Mathf.PI * Mathf.Min(1f, t / 1.2f)) * 2.2f; });
+            // A voice on an old tape: words you can almost make out (a buzz shaped like syllables), under hiss. Loops.
+            float ph = 0f; lp = 0f;
+            Make("murmur", 6f, t =>
+            {
+                float syll = Mathf.PerlinNoise(t * 4.5f, 2.2f);
+                float pitch = 125f + 35f * Mathf.PerlinNoise(t * 0.9f, 5.1f);
+                ph += pitch / SR;
+                float buzz = (ph % 1f) * 2f - 1f;
+                lp += (buzz - lp) * 0.12f;                       // a muffled throat
+                float open = syll > 0.45f ? (syll - 0.45f) * 2.4f : 0f;
+                float pause = Mathf.PerlinNoise(t * 0.7f, 8.8f) > 0.3f ? 1f : 0.1f;
+                return lp * open * pause * 0.7f + Noise() * 0.035f;
+            });
+            // Tape hiss on its own. Loops.
+            Make("hiss", 3f, t => Noise() * 0.06f + Sin(50f, t) * 0.012f);
+            // Paper: a sheet taken, a rustle.
+            lp = 0f;
+            Make("paper", 0.5f, t => { float n = Noise(); lp += (n - lp) * 0.7f; return (n - lp) * Mathf.Exp(-t * 7f) * 0.6f * (0.6f + 0.4f * Mathf.PerlinNoise(t * 90f, 3f)); });
+            // A lid or a bin: a hollow tin clunk.
+            Make("clunk", 0.6f, t => Thump(t, 0f, 160f, 14f) * 0.5f + Thump(t, 0f, 470f, 25f) * 0.3f + Noise() * Mathf.Exp(-t * 120f) * 0.3f);
+            // A ratchet click (winding the clock).
+            Make("ratchet", 0.08f, t => Noise() * Mathf.Exp(-t * 160f) * 0.6f + Thump(t, 0f, 1900f, 120f) * 0.4f);
         }
 
         public static AudioClip Clip(string name)

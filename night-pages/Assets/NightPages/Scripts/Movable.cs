@@ -14,6 +14,7 @@ namespace NightPages
         public bool held;
         Rigidbody body;
 
+        public Rigidbody Body { get { return body; } }
         public bool Heavy { get { return mass > 3f; } }
         public float FromHome { get { return (transform.position - homePos).magnitude; } }
 
@@ -48,9 +49,15 @@ namespace NightPages
             homeRot = transform.rotation;
         }
 
+        /// <summary>When you last had it in your hands (the house leaves alone what you're using).</summary>
+        public float touchedAt = -999f;
+        /// <summary>Something you're working with or just had: the hauntings don't move it.</summary>
+        public bool InUse { get { return held || Time.time - touchedAt < 240f || GetComponent<Tool>() != null; } }
+
         public void SetHeld(bool on)
         {
             held = on;
+            touchedAt = Time.time;
             resting = false;
             body.isKinematic = on;
             foreach (var c in GetComponentsInChildren<Collider>()) c.enabled = !on;      // so it can't shove the player while carried

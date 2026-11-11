@@ -48,6 +48,7 @@ namespace NightPages
             public Side[] sides = new Side[4];          // 0 east (+x), 1 west, 2 north (+z), 3 south
             public Renderer floor;
             public Interactable page;
+            public string dressed;               // what Dress made of it (for tests), or null
         }
         class Edge { public Cell a, b; public int sideA, sideB; public bool open, merged; public int type; public Vector3 mid; public float glowUntil, sealedUntil; }
 
@@ -64,6 +65,9 @@ namespace NightPages
         float nextShift;
         int rot;                                       // 0..3: how far the walls have gone
         public int shifts, pagesRead, pagesPlaced, exitMoves;
+        /// <summary>Called when the dreamer picks up batteries.</summary>
+        public System.Action onBattery;
+
         /// <summary>Called when the dreamer uses a hiding place.</summary>
         public System.Action<HideSpot> onHide;
         public int Size { get { return n; } }
@@ -118,6 +122,7 @@ namespace NightPages
             exitCell = Furthest(lastCell, null);
             foreach (var c in cells) Furnish(c);
             BuildExit();
+            PlaceStoryRooms();
             PlacePages();
             nextShift = Time.time + 18f;
             g.Log("dream maze: " + n + " by " + n + " rooms, the way out is " + Distance(lastCell, exitCell) + " rooms' walk away, " + pagesPlaced + " pages in it");
@@ -150,13 +155,23 @@ namespace NightPages
             // Most rooms are papered with one of the real wallpapers (tinted toward the room's colour); some keep the drawn one.
             string[] real = { "Wallpaper001A", "Wallpaper001B", "Wallpaper001C", "Wallpaper002A", "Wallpaper002B", "Wallpaper002C" };
             string pick = real[(theme * 5 + 3) % real.Length];
-            if (theme % 4 != 0 && Tex.Has(pick))
+            // (The painter's wallpapers came out too soft to cover a whole wall; its portraits, photos, drawings and
+            // smears are used instead. Kept here, off, for when they're better.)
+            Texture2D paintedPaper = null;
+            if (paintedPaper != null)
+            {
+                m.mainTexture = paintedPaper;
+                m.SetColor("_Color", new Color(0.85f, 0.82f, 0.78f));
+            }
+            else if (theme % 4 != 0 && Tex.Has(pick))
             {
                 var photo = Tex.Real(pick, Pitch, H, 1f, Color.white);
                 m.mainTexture = photo.mainTexture;
                 m.SetColor("_Color", Color.Lerp(Color.white, Papers[theme % Papers.Length], 0.45f) * 0.9f);
             }
-            m.mainTextureScale = m.mainTexture is Texture2D && ((Texture2D)m.mainTexture).name.StartsWith("Wallpaper0") ? new Vector2(Pitch / 1.1f, H / 1.1f) : new Vector2(Pitch / 2.4f, H / 2.4f);
+            string texName = m.mainTexture != null ? m.mainTexture.name : "";
+            m.mainTextureScale = texName.StartsWith("Wallpaper0") ? new Vector2(Pitch / 1.1f, H / 1.1f)
+                               : paintedPaper != null ? new Vector2(Pitch / 1.6f, H / 1.6f) : new Vector2(Pitch / 2.4f, H / 2.4f);
             wallMats[key] = m;
             return m;
         }
@@ -255,7 +270,7 @@ namespace NightPages
         int RollDoor()
         {
             int r = rng.Next(100);
-            return r < 28 ? 0 : r < 50 ? 4 : r < 64 ? 1 : r < 77 ? 2 : r < 89 ? 5 : 3;
+            return r < 22 ? 0 : r < 58 ? 4 : r < 68 ? 1 : r < 79 ? 2 : r < 90 ? 5 : 3;
         }
 
         // Build (or rebuild) one room's side of a doorway of the given kind. `leaves`: this side carries the door
@@ -323,14 +338,18 @@ namespace NightPages
                     if (leaves)
                     {
                         Color[] paints = { new Color(0.55f, 0.54f, 0.5f), new Color(0.16f, 0.26f, 0.2f), new Color(0.3f, 0.1f, 0.09f), new Color(0.14f, 0.09f, 0.06f) };
-                        var paint = Build.Mat(paints[rng.Next(paints.Length)], 0f, 0.3f);
-                        var pivot = new GameObject("Hinge").transform;
-                        pivot.SetParent(door, false);
-                        pivot.localPosition = at + along(-g / 2f);
-                        Build.Box("Door leaf", pivot, along(g / 2f) + Vector3.up * (top / 2f), part(g - 0.04f, top - 0.04f, 0.045f), paint, false);
-                        Build.Prim(PrimitiveType.Sphere, "Knob", pivot, along(g - 0.12f) + Vector3.up * 1.02f + inward * 0.06f, Vector3.one * 0.07f, Build.Mat(new Color(0.5f, 0.42f, 0.2f), 0f, 0.7f), false);
-                        // Ajar into the room, by a different amount every time.
-                        pivot.localRotation = Quaternion.Euler(0f, (alongZ ? sign : -sign) * (50f + rng.Next(45)), 0f);
+                        Material paint;
+                        if (Tex.Has("rough_pine_door") && rng.Next(3) > 0) paint = Tex.Real("rough_pine_door", 1f, 1f, 1f, Color.Lerp(paints[rng.Next(paints.Length)], Color.white, 0.55f), null, 0.2f);
+                        else paint = Build.Mat(paints[rng.Next(paints.Length)], 0f, 0.3f);
+                        // A real door, on a real hinge: you open it by hand (see Door). It swings into this room.
+                        float into = (alongZ ? -sign : sign) * 92f;
+                        var d = Door.Create(door, at + along(-g / 2f), into, "maze", paints[0], alongZ ? 0f : 90f, paint, g - 0.04f, top - 0.06f);
+                        // Shut, a crack open, or standing open: a different door every time.
+                        int how = rng.Next(100);
+                        if (how < 45) d.Snap(false);
+                        else if (how < 75) d.Ajar(0.08f + (float)rng.NextDouble() * 0.25f);
+                        else d.Ajar(0.5f + (float)rng.NextDouble() * 0.5f);
+                        doors.Add(d);
                     }
                     break;
                 case 5:
@@ -622,8 +641,11 @@ namespace NightPages
             c.contents = new GameObject("Contents").transform;
             c.contents.SetParent(c.root, false);
             c.page = null;
+            c.dressed = null;
             c.hides.Clear();
-            c.kind = c == exitCell ? 0 : rng.Next(9);
+            // Most rooms were somebody's room once (furnished, lived in, left); the rest are the dream's own strange rooms.
+            int rk = rng.Next(100);
+            c.kind = c == exitCell ? 0 : rk < 8 ? 0 : rk < 56 ? 1 : rk < 63 ? 3 : rk < 70 ? 4 : rk < 76 ? 5 : rk < 85 ? 6 : rk < 91 ? 7 : 8;
             if (c.shape == 3 && c.kind == 4) c.kind = 1;          // (no ring of chairs round the pillars)
             // About half the rooms have a working bulb. The rest are dark: you carry very little light of your own.
             c.lit = c == exitCell || rng.Next(100) < 50;
@@ -633,15 +655,18 @@ namespace NightPages
                 Build.Prim(PrimitiveType.Sphere, "Bulb", c.contents, new Vector3(0f, c.height - 0.12f, 0f), new Vector3(0.09f, 0.11f, 0.09f), Build.Mat(new Color(1f, 0.85f, 0.6f), 1.2f), false);
                 c.lamp = Build.Lamp("Room light", c.contents, new Vector3(0f, c.height - 0.4f, 0f), new Color(1f, 0.86f, 0.66f), 2.6f, 9.5f);
             }
+            Marks(c);
+            // Batteries, now and then: on the floor by a wall, or on something.
+            if (c != exitCell && rng.Next(100) < 22) PutBatteries(c);
             // Most rooms have somewhere to hide, against a wall away from the doorways.
             if (c != exitCell && rng.Next(100) < 70) AddHide(c, rng.Next(3), rng.Next(4));
             if (c != exitCell && rng.Next(100) < 25) AddHide(c, 2, rng.Next(4));
             switch (c.kind)
             {
-                case 0: break;                                           // empty: just the room
-                case 1:                                                  // somebody's room, furnished as some kind of room
+                case 0: if (c != exitCell) DressLight(c); break;          // empty: just the room, and what's been left in it
+                case 1:                                                  // somebody's room, furnished as some kind of room, and lived in, and left
                 case 2:
-                    FurnishAs(c, rng.Next(7));
+                    Dress(c, rng.Next(7));
                     break;
                 case 3:                                                  // the same furniture, on the ceiling
                     for (int i = 0; i < 4; i++) Thing(c, rng.Next(5), Corner(i, 2.2f), rng.Next(4) * 90f, true);
@@ -665,16 +690,27 @@ namespace NightPages
                     }
                     break;
                 case 6:                                                  // a gallery: the painting, on every wall, twice
+                    DressLight(c);
                     for (int s = 0; s < 4; s++)
                         for (int k = -1; k <= 1; k += 2)
                         {
                             bool alongZ = s < 2;
                             float sign = (s == 0 || s == 2) ? 1f : -1f, half = Pitch / 2f - 0.13f;
                             Vector3 at = alongZ ? new Vector3(sign * half, 1.55f, k * 2.4f) : new Vector3(k * 2.4f, 1.55f, sign * half);
-                            Build.Box("Painting", c.contents, at, alongZ ? new Vector3(0.05f, 1.1f, 1.5f) : new Vector3(1.5f, 1.1f, 0.05f), paintMat, false);
+                            string galleryKind = rng.Next(2) == 0 ? "portraits" : "paintings";
+                            var gtex = Painted.Choose(galleryKind, Brain, rng);
+                            var pic = Painted.Picture(gtex, new Color(0.85f, 0.82f, 0.78f)) ?? paintMat;
+                            Build.Box("Frame", c.contents, at - (alongZ ? new Vector3(sign * 0.01f, 0f, 0f) : new Vector3(0f, 0f, sign * 0.01f)), alongZ ? new Vector3(0.04f, 1.22f, 1.22f) : new Vector3(1.22f, 1.22f, 0.04f), new Color(0.12f, 0.08f, 0.05f), false);
+                            var gr = Build.Box("Painting", c.contents, at, alongZ ? new Vector3(0.05f, 1.1f, 1.1f) : new Vector3(1.1f, 1.1f, 0.05f), pic, false);
+                            Painted.Hang(gr.GetComponent<Renderer>(), galleryKind, gtex);
+                            // A picture light over each one (the paintings are dark: without it they're black squares).
+                            Vector3 into = alongZ ? new Vector3(-sign, 0f, 0f) : new Vector3(0f, 0f, -sign);
+                            Build.Box("Picture light", c.contents, at + Vector3.up * 0.68f + into * 0.08f, alongZ ? new Vector3(0.12f, 0.04f, 0.4f) : new Vector3(0.4f, 0.04f, 0.12f), new Color(0.45f, 0.36f, 0.16f), false);
+                            var pl = Build.Lamp("Picture light", c.contents, at + Vector3.up * 0.62f + into * 0.35f, new Color(1f, 0.85f, 0.6f), 1.1f, 1.8f);
                         }
                     break;
                 case 7:                                                  // flooded: black water over the floor
+                    DressLight(c);
                     Build.Box("Water", c.contents, new Vector3(0f, 0.12f, 0f), new Vector3(Pitch - 0.25f, 0.02f, Pitch - 0.25f), Build.Mat(new Color(0.01f, 0.018f, 0.02f), 0f, 0.62f), false);
                     if (rng.Next(2) == 0) Thing(c, 0, new Vector3(0.6f, 0f, -0.4f), rng.Next(360));
                     break;
@@ -687,6 +723,103 @@ namespace NightPages
                         d.transform.localRotation = Quaternion.Euler(0f, rng.Next(360), 0f);
                     }
                     break;
+            }
+        }
+
+        void PutBatteries(Cell c)
+        {
+            Vector3 at = new Vector3(((float)rng.NextDouble() - 0.5f) * 5f, 0.03f, ((float)rng.NextDouble() - 0.5f) * 5f);
+            if (Blocked(c, at)) return;
+            var pack = new GameObject("Batteries").transform;
+            pack.SetParent(c.contents, false);
+            pack.localPosition = at;
+            pack.localRotation = Quaternion.Euler(0f, rng.Next(360), 0f);
+            var shell = Build.Mat(new Color(0.85f, 0.55f, 0.1f), 0f, 0.5f);
+            var cap = Build.Mat(new Color(0.12f, 0.12f, 0.12f), 0.6f, 0.6f);
+            for (int i = 0; i < 2; i++)
+            {
+                var b = Build.Prim(PrimitiveType.Cylinder, "Battery", pack, new Vector3(i * 0.04f - 0.02f, 0.017f, 0f), new Vector3(0.033f, 0.03f, 0.033f), shell, false);
+                b.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+                Build.Prim(PrimitiveType.Cylinder, "Cap", pack, new Vector3(i * 0.04f - 0.02f, 0.017f, 0.032f), new Vector3(0.034f, 0.004f, 0.034f), cap, false).transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            }
+            var hit = Build.Box("Batteries", pack, new Vector3(0f, 0.04f, 0f), new Vector3(0.22f, 0.1f, 0.22f), Color.black, true);
+            hit.GetComponent<Renderer>().enabled = false;
+            hit.GetComponent<Collider>().isTrigger = false;
+            var it = Build.Usable(hit, "Take the batteries");
+            bool bait = (Habits.Level(g, "takes batteries") >= 1 || Habits.Level(g, "flashlight") >= 2) && rng.NextDouble() < 0.35;
+            it.use = () =>
+            {
+                if (onBattery != null) onBattery();
+                Habits.Use(g, "takes batteries");
+                Object.Destroy(pack.gameObject);
+                if (bait && !c.held)
+                {
+                    // Left where you'd go for them: the room shuts round you.
+                    Habits.trapsSprung++;
+                    g.Log("habits: you always go for the batteries; these were bait, and the room shuts");
+                    g.StartCoroutine(Sealed(c));
+                }
+            };
+        }
+
+        FearCore.Learner Brain { get { return g.fear != null ? g.fear.brain : null; } }
+
+        /// <summary>The real doors in the maze (the hinged kind you open by hand).</summary>
+        public readonly List<Door> doors = new List<Door>();
+
+        /// <summary>Doors with their middle within `r` of `p` (on the floor plan).</summary>
+        public List<Door> DoorsNear(Vector3 p, float r)
+        {
+            var near = new List<Door>();
+            doors.RemoveAll(d => d == null);
+            foreach (var d in doors)
+                if (d.gameObject.activeInHierarchy && Vis.Level(d.Middle - p).magnitude < r) near.Add(d);
+            return near;
+        }
+
+        /// <summary>Called when the dreamer reads a page that was left as bait.</summary>
+        public System.Action onBait;
+
+        // ---------------------------------------------------------------- what's on the walls
+
+        // The painter's marks: writing scrawled on a wall, a stain coming down from the ceiling, a child's drawing
+        // pinned up, a face in a frame. Different in every room, every night.
+        void Marks(Cell c)
+        {
+            if (c == exitCell) return;
+            for (int n = 0; n < 2; n++)
+            {
+                int r = rng.Next(100);
+                string kind = r < 22 ? "writing" : r < 40 ? "stains" : r < 55 ? "drawings" : r < 62 ? "portraits" : null;
+                if (kind == null) continue;
+                var tex = kind == "portraits" || kind == "drawings" ? Painted.Choose(kind, Brain, rng) : Painted.Pick(kind, rng);
+                if (tex == null) continue;
+                int s = rng.Next(4);
+                bool alongZ = s < 2;
+                float sign = (s == 0 || s == 2) ? 1f : -1f, half = Pitch / 2f - 0.11f;
+                // To one side of the doorway (or anywhere, if the wall is whole).
+                float lat = (rng.Next(2) == 0 ? -1f : 1f) * (1.6f + (float)rng.NextDouble() * 1.6f);
+                float w, h, y;
+                if (kind == "writing") { w = 2.2f; h = 1.5f; y = 1.45f; }
+                else if (kind == "stains") { w = 2.8f; h = 2.0f; y = c.height - 1.0f; }
+                else if (kind == "drawings") { w = 0.42f; h = 0.32f; y = 1.35f + (float)rng.NextDouble() * 0.3f; }
+                else { w = 0.6f; h = 0.6f; y = 1.6f; }
+                Vector3 at = alongZ ? new Vector3(sign * half, y, lat) : new Vector3(lat, y, sign * half);
+                Vector3 size = alongZ ? new Vector3(0.01f, h, w) : new Vector3(w, h, 0.01f);
+                if (Blocked(c, new Vector3(at.x, 0f, at.z))) continue;
+                if (kind == "writing" || kind == "stains")
+                {
+                    var m = Painted.Decal(tex, kind == "stains" ? 0.85f : 1f, kind == "stains" ? 0.15f : 0.35f);
+                    if (m != null) Build.Box("Marks on the wall", c.contents, at, size, m, false);
+                }
+                else
+                {
+                    Vector3 inward = alongZ ? new Vector3(-sign, 0f, 0f) : new Vector3(0f, 0f, -sign);
+                    if (kind == "portraits") Build.Box("Frame", c.contents, at - inward * 0.005f, size + new Vector3(alongZ ? 0.03f : 0.1f, 0.1f, alongZ ? 0.1f : 0.03f), new Color(0.12f, 0.08f, 0.05f), false);
+                    var pic = Painted.Picture(tex, kind == "drawings" ? new Color(0.95f, 0.93f, 0.88f) : new Color(0.85f, 0.82f, 0.78f));
+                    var pr = Build.Box(kind == "drawings" ? "Drawing" : "Portrait", c.contents, at + inward * 0.01f, size, pic, false);
+                    Painted.Hang(pr.GetComponent<Renderer>(), kind, tex);
+                }
             }
         }
 
@@ -779,6 +912,41 @@ namespace NightPages
         }
 
         public List<HideSpot> HidesIn(Vector3 pos) { return CellAt(pos).hides; }
+
+        /// <summary>A hiding place of this kind ("locker", "cabinet", "table") within `rooms` rooms of `pos` but not in its room, or null.</summary>
+        public HideSpot HideOfKind(Vector3 pos, string what, int rooms)
+        {
+            var here = CellAt(pos);
+            var prev = Walk(here);
+            var options = new List<HideSpot>();
+            foreach (var c in prev.Keys)
+            {
+                if (c == here || c.held) continue;
+                int d = 0;
+                for (var k = c; k != here; k = prev[k]) d++;
+                if (d > rooms) continue;
+                foreach (var h in c.hides) if (h.what == what) options.Add(h);
+            }
+            return options.Count > 0 ? options[rng.Next(options.Count)] : null;
+        }
+
+        /// <summary>The middle of a dark room near `pos` (by walking), or null.</summary>
+        public Vector3? DarkRoomNear(Vector3 pos, int rooms)
+        {
+            var here = CellAt(pos);
+            var prev = Walk(here);
+            var options = new List<Cell>();
+            foreach (var c in prev.Keys)
+            {
+                if (c.lit) continue;
+                int d = 0;
+                for (var k = c; k != here; k = prev[k]) d++;
+                if (d <= rooms) options.Add(c);
+            }
+            if (options.Count == 0) return null;
+            var pick = options[rng.Next(options.Count)];
+            return World(Local(pick.x, pick.z));
+        }
         public bool Dark(Vector3 pos) { return !CellAt(pos).lit; }
         /// <summary>The height of the ceiling over `pos`, above the maze floor (0 if there isn't one just now).</summary>
         public float CeilingOver(Vector3 pos)
@@ -915,7 +1083,7 @@ namespace NightPages
         {
             var lore = Lore.Pages(g, day, rng);
             var rooms = new List<Cell>();
-            foreach (var c in cells) if (c != exitCell && c != lastCell) rooms.Add(c);
+            foreach (var c in cells) if (c != exitCell && c != lastCell && c.page == null) rooms.Add(c);
             int want = Mathf.Min(lore.Count, 2 + n / 2);
             for (int i = 0; i < want && rooms.Count > 0; i++)
             {
@@ -933,8 +1101,20 @@ namespace NightPages
             Build.Lamp("Page glow", go.transform, new Vector3(0f, 0.4f, 0f), new Color(0.95f, 0.9f, 0.75f), 0.5f, 2.5f);
             var it = Build.Usable(go, "Read the page");
             bool read = false;
+            // You stop to read everything: some of them are left out for you to stop at.
+            bool bait = Habits.Level(g, "reads pages") >= 1 && rng.NextDouble() < 0.25 + 0.12 * Habits.Level(g, "reads pages");
             it.use = () =>
             {
+                if (!read)
+                {
+                    Habits.Use(g, "reads pages");
+                    if (bait)
+                    {
+                        Habits.trapsSprung++;
+                        g.Log("habits: you always stop to read; this page was left there for you to stop at");
+                        if (onBait != null) onBait();
+                    }
+                }
                 int left = RoomsToExit(g.player.transform.position);
                 g.ReadDreamPage(text, read ? null : (left <= 1 ? "The ticking is very close." : "The ticking is " + left + " rooms from here. The doorways toward it are lit, for now."));
                 if (read) return;
@@ -1192,6 +1372,13 @@ namespace NightPages
                     break;
             }
             pages.Add("If you're reading this you're asleep. Follow the ticking. That's the clock by the bed, the real one.\n\nDon't stay to read all of these. I did.");
+            // This run's ghost story, in the dreamer's own words: a few pieces of it every night, never all of it.
+            if (g.tale != null)
+            {
+                var told = g.tale.Pages();
+                for (int i = 0; i < 3 && told.Count > 0; i++) { int k = rng.Next(told.Count); pages.Add(told[k]); told.RemoveAt(k); }
+                if (g.tale.rules.Count > 0 && rng.Next(3) == 0) pages.Add(g.tale.RulesNote());
+            }
             // Tonight's order is tonight's own.
             for (int i = pages.Count - 1; i > 0; i--) { int j = rng.Next(i + 1); var t = pages[i]; pages[i] = pages[j]; pages[j] = t; }
             return pages;

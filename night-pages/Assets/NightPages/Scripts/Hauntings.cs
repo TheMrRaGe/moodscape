@@ -10,7 +10,7 @@ namespace NightPages
     /// lights, a figure, a doorway that is no longer there. Almost everything happens only while the player
     /// isn't looking. Each event is logged to the Mind overlay with its reason.
     /// </summary>
-    public class Hauntings : MonoBehaviour
+    public partial class Hauntings : MonoBehaviour
     {
         GameDirector g;
         FearCore.Storyteller teller;
@@ -61,13 +61,15 @@ namespace NightPages
             fig.needsCreature = true;
             Add("doorgone", "a doorway is gone", 2, 3f, 6, DoorGone, FearTypes.Trapped, FearTypes.Uncanny, "sight");
             Add("behind", "it was right behind you", 2, 3f, 3, Behind, FearTypes.Hunted, "near", "behind").needsCreature = true;
+            // The grounded ones: what people really report, done the way they report it (see HauntingsGrounded).
+            InitGrounded();
 
             // Where you hide gets the worst of it, once the house has learned where that is.
             teller.Bias = i =>
             {
                 var d = g.dread;
                 bool inRefuge = d != null && d.RefugeCorrupt && g.house.RoomAt(PlayerPos) == d.Refuge;
-                return inRefuge && i.tier >= 1 ? 0.4f : 0f;
+                return (inRefuge && i.tier >= 1 ? 0.4f : 0f) + GroundBias(i);
             };
             // In the rests, the music box alone, once it has been paired with frights: it does the work by itself.
             teller.DreadMoment = () =>
@@ -278,7 +280,7 @@ namespace NightPages
             var moved = new List<Movable>();
             foreach (var m in g.house.movables)
             {
-                if (m == null || m.held || m.FromHome < 0.7f) continue;
+                if (m == null || m.InUse || m.FromHome < 0.7f) continue;
                 if (Vis.Sees(Cam, m.transform.position, m.transform) || Vis.Sees(Cam, m.homePos)) continue;
                 if ((m.homePos - PlayerPos).magnitude < 2f) continue;
                 moved.Add(m);

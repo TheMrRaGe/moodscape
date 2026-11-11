@@ -20,6 +20,8 @@ namespace NightPages
         public int day;
         public float grip = 0.8f;
         public Truth truth;
+        /// <summary>This run's ghost story (who, what happened, why they stay, how they show it): see Tale.</summary>
+        public Tale tale;
         /// <summary>Hardcore: not getting out of a dream sends you back to day one. (Otherwise you dream it again, in a new maze.)</summary>
         public bool hardcore;
         /// <summary>How many times this run you didn't get out of a dream.</summary>
@@ -42,6 +44,10 @@ namespace NightPages
         public Player player;
         public Chores chores;
         public Manuscript script;
+        /// <summary>What you do for a living this run (the afternoon's work, and how the story is told).</summary>
+        public Job job;
+        public bool workDone;
+        public DayClock clock;
         public Hauntings haunt;
         public Dream dream;
         public VRHud vrHud;
@@ -93,6 +99,12 @@ namespace NightPages
             try { if (System.IO.File.Exists(TellerPath)) brain.Load(System.IO.File.ReadAllText(TellerPath)); }
             catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't read the storyteller's memory (" + e.Message + "); starting fresh"); }
             teller = new FearCore.Storyteller(brain) { Log = s => Log(s) };
+            // What it learned about your habits in earlier runs (weaker now, but it remembers).
+            try { if (System.IO.File.Exists(HabitsPath)) { teller.tactics.Load(System.IO.File.ReadAllText(HabitsPath)); Log("habits: remembered from before: " + Habits.Describe(this)); } }
+            catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't read habits: " + e.Message); }
+            // Walking into doors used to count as slamming them, so every player was remembered as a slammer. Once: forget it.
+            try { if (PlayerPrefs.GetInt("np_doorfix", 0) == 0) { teller.tactics.Forget("slams doors"); PlayerPrefs.SetInt("np_doorfix", 1); PlayerPrefs.Save(); Log("habits: forgot 'slams doors' (it was counting walking into doors)"); } }
+            catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't read your habits (" + e.Message + ")"); }
             fear.brain = brain;
             fear.onEase = why => teller.Overwhelmed(why, 0.2f, Time.time);
             // A hallucination's measured effect goes back into the fear engine's slot 17, so the dreams know it too.
@@ -119,11 +131,17 @@ namespace NightPages
             player = Player.Create(house.bedSpawn);
             Mirror.HideFrom(player.cam);          // what is only in the mirror stays only in the mirror
             VRRig.Attach(player);
+            Hands.Attach(player);
+            Watch.Attach(player);
             if (!VRRig.Active) Look.Attach(player.cam);
             vrHud = VRHud.Create(hud, player);
             house.SetTime(0, 1);
+            clock = DayClock.Attach(this);
+            Playtest.Attach(this);
 
             chores = new Chores(this);
+            job = Job.Make(JobPref == "random" ? "writer" : JobPref);
+            job.Init(this);
             script = new Manuscript(this);
             script.Reset();
             dread = gameObject.AddComponent<Dread>();
@@ -158,9 +176,11 @@ namespace NightPages
         {
             Debug.Log("[NightPages] " + line);
             Tour.Note(line);
+            if (Playtest.I != null) Playtest.I.Note(line);
             if (hud != null) hud.Log(line);
         }
 
+        static string HabitsPath { get { return System.IO.Path.Combine(Application.persistentDataPath, "nightpages-habits.txt"); } }
         static string TellerPath { get { return System.IO.Path.Combine(Application.persistentDataPath, "nightpages-teller.txt"); } }
 
         /// <summary>Keep what the storyteller has learned (every morning, after every dream, on quitting).</summary>
@@ -169,6 +189,9 @@ namespace NightPages
             if (teller == null) return;
             try { System.IO.File.WriteAllText(TellerPath, teller.learner.Save()); }
             catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't save the storyteller's memory: " + e.Message); }
+            try { System.IO.File.WriteAllText(HabitsPath, teller.tactics.Save()); }
+            catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't save your habits: " + e.Message); }
+            Painted.WriteWishes(teller.learner);
         }
 
         void OnApplicationQuit() { SaveTeller(); }
@@ -195,10 +218,10 @@ namespace NightPages
             player.frozen = true;
             hud.fade = hud.fadeTarget = 1f;
             hud.header = "NIGHT PAGES";
-            hud.body = "A prototype.\n\nWASD to move, mouse to look, E to use, Shift to hurry.\nThe dreams learn what unsettles you, and they remember.\n\n" +
+            hud.body = "A prototype.\n\nWASD to move, mouse to look, E to use, Shift to hurry. Hold the left mouse button to work with your hands\n(scrub, sweep, turn, pour) and Tab to look at your watch.\nThe dreams learn what unsettles you, and they remember.\n\n" +
                        "<size=22>F1: see what the game is thinking.  F2: skip ahead.  V: let it listen for gasps (microphone).\n" +
                        "Hold F / G in a dream to fake a scared / amused reaction.  A VR headset is picked up by itself.</size>";
-            hud.vrBody = "A prototype.\n\nLeft stick to walk, right stick to turn. Point your right hand and pull the trigger to use things.\n" +
+            hud.vrBody = "A prototype.\n\nLeft stick to walk, right stick to turn. Point your right hand and pull the trigger to use things.\nGrip to pick things up with either hand. Your watch is on your left wrist.\n" +
                          "The dreams learn what unsettles you, and they remember.\n\n" +
                          "<size=50>Left Y: see what the game is thinking.  Keyboard V: let it listen for gasps.</size>";
             hardcore = PlayerPrefs.GetInt("np_hardcore", 0) == 1;
@@ -209,11 +232,25 @@ namespace NightPages
 
         string titleBody;
 
+        /// <summary>The job the title screen is set to ("random" or one of Job.Ids).</summary>
+        static string JobPref { get { return PlayerPrefs.GetString("np_job", "random"); } }
+
+        void CycleJob()
+        {
+            var order = new List<string> { "random" };
+            order.AddRange(Job.Ids);
+            int i = order.IndexOf(JobPref);
+            PlayerPrefs.SetString("np_job", order[(i + 1) % order.Count]);
+            PlayerPrefs.Save();
+            ShowHardcore();
+            Sfx.Ui("pageturn", 0.5f);
+        }
+
         void ShowHardcore()
         {
             hud.body = titleBody + "\n\n<size=22>Each night's dream is a maze that changes. Get out before the night runs out.\n" +
                        (hardcore ? "HARDCORE: if you don't get out, you start again from day one." : "If you don't get out, you dream it again, in a different maze.") + "</size>";
-            hud.footer = "[E]  Begin        [1]  Hardcore: " + (hardcore ? "ON" : "off");
+            hud.footer = "[E]  Begin        [1]  Hardcore: " + (hardcore ? "ON" : "off") + "        [2]  You work as: " + (JobPref == "random" ? "(any)" : Job.NameOf(JobPref));
         }
 
         /// <summary>A page found in the dream: this run's story, and (the first time) how far the way out is.</summary>
@@ -271,8 +308,14 @@ namespace NightPages
         // What the house's own things do when used.
         void WireHouse()
         {
-            house.typewriter.use = UseTypewriter;
+            // Whatever isn't this run's job is just his things.
+            house.typewriter.promptFn = () => "Grandpa's typewriter";
+            house.typewriter.use = () => hud.Say("His typewriter. You've never managed more than a line on it.", 3f);
+            if (house.deck != null) { house.deck.promptFn = () => "The tape deck"; house.deck.use = () => hud.Say("There's a tape threaded on it. You leave it be.", 3f); }
+            if (house.enlarger != null) { house.enlarger.promptFn = () => "Grandpa's enlarger"; house.enlarger.use = () => hud.Say("He used to print his own photographs in here. The chemicals have gone brown.", 3.5f); }
+            if (job != null) job.Wire(house);
             house.bed.use = UseBed;
+            house.shelf.promptFn = () => "Look over your work so far";
             house.shelf.use = ReadManuscript;
             house.cellar.use = UseCellar;
             house.cellar.promptFn = () => cellarOpened ? "Go down to the cellar" : "The cellar door";
@@ -304,7 +347,7 @@ namespace NightPages
             WireHouse();
             chores.Wire();
             uncanny.Wire();
-            house.SetTime(phase == Phase.Evening ? 1 : 0, day);
+            house.SetHour(clock != null ? clock.Hour : 10f, Mathf.Max(1, day));
             House.ForceLayout = keep;
         }
 
@@ -323,9 +366,16 @@ namespace NightPages
             rewriteSeed = rng.Next(3);
             foreach (var n in notes) if (n.go != null) Destroy(n.go);
             notes.Clear();
+            string pick = JobPref == "random" ? Job.Ids[rng.Next(Job.Ids.Length)] : JobPref;
+            job = Job.Make(pick);
+            job.Init(this);
+            WireHouse();
+            Log("this run you work as " + job.Name + " (" + (JobPref == "random" ? "drawn at random" : "chosen on the title screen") + ")");
             script.Reset();
             hud.mindLines.Clear();
             Log("new run. truth drawn: " + truth + " (60/20/20 odds; the player isn't told)");
+            tale = Tale.Tell(truth, rng, fear.brain, s => Log(s));
+            haunt.SetTale(tale);
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
             StartCoroutine(BeginDay(1));
@@ -349,7 +399,12 @@ namespace NightPages
             day = d;
             phase = Phase.Morning;
             Tour.Step("begin day " + d + ": lighting the house");
-            house.SetTime(0, day);
+            foreach (var r in house.rooms) r.lit = false;
+            house.ShowSwitches();
+            clock.StartDay();
+            workDone = false;
+            script.NewDay(day);
+            job.BeginDay(day);
             player.speedMul = 1f;
             player.eyeHeight = 1.65f;
             player.Teleport(house.bedSpawn, 200f);
@@ -359,9 +414,11 @@ namespace NightPages
             dread.BeginDay(day);
             uncanny.BeginDay(day);
             haunt.BeginDay(day);
+            house.Wear(day);
             SaveTeller();
             RefreshObjectives();
             hud.Say(day >= Days ? "Day " + day + ". The last one." : "Day " + day, 3f);
+            if (day == 1) hud.Say(job.Intro, 5f);
             if (day > 1 && !string.IsNullOrEmpty(fear.lastLine)) hud.Say("You wake with the dream still in the room.", 3.5f);
             if (day >= Days) hud.Say("Your coat is on the hook by the front door. You could just go.", 5f);
             yield return new WaitForSeconds(0.4f);
@@ -371,59 +428,87 @@ namespace NightPages
             busy = false;
         }
 
+        /// <summary>Redraw the day's list (chores call this as they change).</summary>
+        public void RefreshList() { RefreshObjectives(); }
+
         void RefreshObjectives()
         {
             hud.objectives.Clear();
-            if (phase == Phase.Morning)
-                foreach (var c in chores.today) hud.objectives.Add(new KeyValuePair<string, bool>(c.text, c.done));
-            else if (phase == Phase.Afternoon)
-                hud.objectives.Add(new KeyValuePair<string, bool>("Write today's chapter (typewriter, study)", false));
-            else if (phase == Phase.Evening)
+            if (phase == Phase.Morning || phase == Phase.Afternoon || phase == Phase.Evening)
             {
-                foreach (var n in notes)
-                    if (!n.read) { hud.objectives.Add(new KeyValuePair<string, bool>("Something has been left out for you", false)); break; }
-                hud.objectives.Add(new KeyValuePair<string, bool>("Go to bed (bedroom)", false));
+                if (In.Held(Btn.Watch) && clock != null) hud.objectives.Add(new KeyValuePair<string, bool>("It's " + clock.Now + ".", false));
+                chores.List(hud.objectives, phase != Phase.Morning);
+                hud.objectives.Add(new KeyValuePair<string, bool>(DayClock.Say(job.From).PadRight(9) + job.ListLine, workDone));
+                if (phase == Phase.Evening)
+                {
+                    foreach (var n in notes)
+                        if (!n.read) { hud.objectives.Add(new KeyValuePair<string, bool>("now      Something has been left out for you", false)); break; }
+                    hud.objectives.Add(new KeyValuePair<string, bool>(DayClock.Say(DayClock.BedFrom).PadRight(9) + "Bed (bedroom)", false));
+                }
             }
             else if (phase == Phase.Dream)
             {
                 int left = Mathf.CeilToInt(dream.TimeLeft);
                 hud.objectives.Add(new KeyValuePair<string, bool>(dream.Maze != null ? "Find the way out before the night ends  (" + (left / 60) + ":" + (left % 60).ToString("00") + ")" : "Find the way out", false));
                 if (dream.Maze != null) hud.objectives.Add(new KeyValuePair<string, bool>("Follow the ticking. Pages buy time.", false));
+                if (dream.Maze != null) hud.objectives.Add(new KeyValuePair<string, bool>("[Q] Flashlight " + Mathf.RoundToInt(dream.Battery * 100f) + "%" + (dream.TorchOn ? " (on: it can see the light)" : ""), false));
             }
         }
 
         public void OnChoreDone()
         {
-            if (chores.AllDone && phase == Phase.Morning)
-            {
-                phase = Phase.Afternoon;
-                hud.Say("The chores are done. The page is waiting.", 3.5f);
-            }
+            if (phase == Phase.Morning && chores.MorningDone) hud.Say("That's the morning's jobs. " + (workDone ? "" : "The work is waiting."), 3f);
             RefreshObjectives();
         }
 
-        void UseTypewriter()
-        {
-            if (phase == Phase.Afternoon) script.Begin(day, day > 1 ? fear.lastLine : null);
-            else if (phase == Phase.Morning) hud.Say("Chores first. That was always the rule in this house.", 3f);
-            else ReadManuscript();
-        }
-
+        /// <summary>The day's work is done (the last piece of it chosen, or skipped).</summary>
         public void OnChapterDone()
         {
-            hud.modal = Modal.None;
+            hud.Close();
             player.frozen = false;
-            phase = Phase.Evening;
-            house.SetTime(1, day);
-            haunt.Evening();
-            SpawnClue();
+            workDone = true;
+            job.DayDone();
+            Log("work: done for day " + day + " at " + clock.Now);
+            hud.Say(job.DoneLine, 3.5f);
             RefreshObjectives();
-            hud.Say("Evening. The house settles around you.", 3.5f);
         }
+
+        /// <summary>The clock moved the day on: noon, dusk, and (if you're still up) one in the morning.</summary>
+        void TimeOfDay()
+        {
+            if (busy || clock == null || !clock.running) return;
+            if (phase != Phase.Morning && phase != Phase.Afternoon && phase != Phase.Evening) return;
+            float m = clock.minutes;
+            if (phase == Phase.Morning && m >= DayClock.Noon)
+            {
+                phase = Phase.Afternoon;
+                Log("clock: noon. Afternoon");
+                hud.Say(workDone ? "Midday." : "Midday. The work is waiting: " + job.ListLine.ToLower() + ".", 3.5f);
+                RefreshObjectives();
+            }
+            if (phase == Phase.Afternoon && m >= DayClock.Dusk)
+            {
+                phase = Phase.Evening;
+                Log("clock: six o'clock. Evening");
+                haunt.Evening();
+                SpawnClue();
+                RefreshObjectives();
+                hud.Say("Evening. The light's going. The switches are by the doors.", 3.5f);
+                if (!workDone) hud.Say("Today's work isn't done.", 3f);
+            }
+            if (m >= DayClock.PassOut && hud.modal == Modal.None)
+            {
+                Log("clock: one in the morning; you fall asleep where you are");
+                hud.Say("You don't remember lying down.", 3f);
+                StartCoroutine(Sleep());
+            }
+        }
+
+        public void ReadWork() { ReadManuscript(); }
 
         void ReadManuscript()
         {
-            hud.header = "The manuscript";
+            hud.header = job != null ? job.RecordTitle : "The manuscript";
             hud.body = script.FullText();
             hud.footer = "[E] or [Esc] to put it down";
             player.frozen = true;
@@ -434,8 +519,9 @@ namespace NightPages
         void UseBed()
         {
             if (busy) return;
-            if (phase == Phase.Evening) StartCoroutine(Sleep());
-            else hud.Say("Not yet. There's still the day to get through.", 3f);
+            if (phase == Phase.Evening && (workDone || clock.minutes >= DayClock.BedFrom)) StartCoroutine(Sleep());
+            else if (phase == Phase.Evening) hud.Say("Not yet. The work's not done. (Or wait until nine, and let it go.)", 3f);
+            else hud.Say("Not yet. There's still the day to get through. It's " + clock.Now + ".", 3f);
         }
 
         IEnumerator Sleep()
@@ -446,6 +532,7 @@ namespace NightPages
             int unread = 0;
             foreach (var n in notes) if (!n.read) unread++;
             if (unread > 0) Shake(0.05f * unread, "went to bed without reading what was left out (" + unread + ")");
+            if (!workDone) { script.SkipRest(); workDone = true; Log("work: went to bed without finishing it (counts as looking away)"); }
             haunt.ClearTransient();
             hud.ClearSubtitles();
             // Some nights you wake before the dream, and can't move.
@@ -526,7 +613,7 @@ namespace NightPages
             else
             {
                 player.Teleport(house.hallSouth + new Vector3(0f, 0.05f, 0.6f), 0f);
-                house.SetTime(phase == Phase.Evening ? 1 : 0, day);
+                house.SetHour(clock.Hour, day);
             }
             yield return new WaitForSeconds(0.5f);
             hud.fadeSpeed = 0.8f;
@@ -561,10 +648,18 @@ namespace NightPages
 
         void SpawnClue()
         {
-            if (day < 2 || cluesSpawned >= ClueTexts[(int)truth].Length) return;
+            // Today's note: the story's and the truth's, taking turns (the story's first: it's how the house introduces itself).
+            var taleClues = tale != null ? tale.Clues() : new List<string>();
+            var all = new List<string>();
+            for (int i = 0; i < Mathf.Max(taleClues.Count, ClueTexts[(int)truth].Length); i++)
+            {
+                if (i < taleClues.Count) all.Add(taleClues[i]);
+                if (i < ClueTexts[(int)truth].Length) all.Add(ClueTexts[(int)truth][i]);
+            }
+            if (day < 2 || cluesSpawned >= all.Count) return;
             var free = new List<Room>(house.rooms);
             var room = free[rng.Next(free.Count)];
-            var note = new Note { text = ClueTexts[(int)truth][cluesSpawned++] };
+            var note = new Note { text = all[cluesSpawned++] };
             note.go = Build.Box("Note", house.transform, room.notePoint, new Vector3(0.22f, 0.02f, 0.3f), new Color(0.95f, 0.92f, 0.8f), true, 0.6f);
             var it = Build.Usable(note.go, "Read what's been left here");
             it.use = () => ReadNote(note);
@@ -608,17 +703,17 @@ namespace NightPages
             if (how == "leave")
             {
                 id = 5; title = "UNFINISHED";
-                text = "You take your coat and leave the pages on the desk.\n\nThe house watches you to the end of the road. It will keep.";
+                text = job.Leave + "\n\nThe house watches you to the end of the road. It will keep.";
             }
             else if (truth == Truth.Killer && grip >= 0.45f && clues >= 3 && faced)
             {
                 id = 0; title = "CONFESSION";
-                text = "You finish the last chapter as what it always was.\n\nThen you pick up the telephone, and tell them where to dig.";
+                text = job.Confession;
             }
             else if (truth == Truth.Killer)
             {
                 id = 1; title = "THE GENTLER STORY";
-                text = "You feed the fire a page at a time until the story is simple again.\n\nIt was a good house. Anyone would have said so.\n\nIn the morning you make coffee. Two cups.";
+                text = job.Gentler + "\n\nIt was a good house. Anyone would have said so.\n\nIn the morning you make coffee. Two cups.";
             }
             else if (truth == Truth.Keepers && clues >= 3 && faced)
             {
@@ -692,6 +787,7 @@ namespace NightPages
                         ShowHardcore();
                         Sfx.Ui("pageturn", 0.5f);
                     }
+                    if (!busy && In.Down(Btn.Two)) CycleJob();
                     if (!busy && In.Down(Btn.Interact)) NewRun();
                     break;
                 case Modal.Ending:
@@ -712,8 +808,16 @@ namespace NightPages
 
             if (In.Down(Btn.SkipAhead) && !busy) SkipAhead();
 
+            if (phase == Phase.Morning || phase == Phase.Afternoon || phase == Phase.Evening)
+            {
+                chores.Tick();
+                job.Tick();
+                TimeOfDay();
+                if (In.Down(Btn.Watch) || (Time.frameCount % 20 == 0)) RefreshObjectives();
+            }
             Reactions.Tick(link, player);
             WallHands.Tick(this);
+            Habits.Tick(this);
             hud.grip = phase == Phase.Title || phase == Phase.Ending ? 1f : grip;
             // What the storyteller is told: how well you're holding up, and how late in the day it is.
             teller.Standing = grip;
@@ -737,7 +841,7 @@ namespace NightPages
                 hud.mindStatus = "day " + day + " · " + phase + " · truth " + truth + " · grip " + grip.ToString("0.00") + " · clues " + clues +
                                  "\nlines: faced " + tagFace + " / away " + tagAway + " / blamed " + tagBlame +
                                  "\nreaction " + Reactions.Level.ToString("+0.00;-0.00") + ", led by " + Reactions.Source + Reactions.Describe() +
-                                 "\n" + link.Status + (VRRig.Active ? "\nVR: on" : "") +
+                                 "\n" + link.Status + (VRRig.Active ? "\nVR: on" : "") + "\nclock " + clock.Now + " · work: " + job.Name + (workDone ? " (done)" : "") +
                                  "\nstoryteller: " + teller.Status() + "\nlearner: " + teller.learner.Describe() +
                                  (phase == Phase.Dream ? "\ndream: " + fear.Describe() : "");
         }
@@ -748,9 +852,9 @@ namespace NightPages
             if (hud.modal == Modal.Reading) { hud.modal = Modal.None; player.frozen = false; }
             switch (phase)
             {
-                case Phase.Morning: chores.CompleteAll(); OnChoreDone(); break;
-                case Phase.Afternoon: script.AutoWrite(day); break;
-                case Phase.Evening: StartCoroutine(Sleep()); break;
+                case Phase.Morning: chores.CompleteAll(); OnChoreDone(); clock.JumpTo(DayClock.Noon); break;
+                case Phase.Afternoon: if (!workDone) script.AutoWrite(day); clock.JumpTo(DayClock.Dusk); break;
+                case Phase.Evening: clock.JumpTo(DayClock.BedFrom); StartCoroutine(Sleep()); break;
                 case Phase.Dream: dream.ForceEnd(); break;
             }
         }

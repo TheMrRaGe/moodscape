@@ -14,7 +14,7 @@ namespace NightPages
     /// into one body of flesh (Flesh.cs), so whatever it becomes looks like it grew that way.
     /// It changes while you look away, or, if the engine finds that works better on you, in front of you.
     /// </summary>
-    public class Monster : MonoBehaviour
+    public partial class Monster : MonoBehaviour
     {
         public const int Body = 0, Head = 1, Arms = 2, Face = 3, Gait = 4, Kind = 5, Shift = 6, Legs = 7, Skin = 8, HeadKind = 9, Extra = 10, Traits = 11;
 
@@ -194,7 +194,7 @@ namespace NightPages
             {
                 clock += Time.deltaTime;
                 Heave(home, homeRot, clock, 0.5f);
-                yield return null;
+                yield return null; if (this == null) { if (next != null) Destroy(next.gameObject); yield break; }
             }
             if (shader == null || job.Failed || job.MeshAt(0) == null)
             {
@@ -235,7 +235,7 @@ namespace NightPages
                 mat.SetFloat("_Dissolve", 1f - h / 0.45f);
                 mat.SetFloat("_Writhe", 0.3f * h / 0.45f);
                 Heave(home, homeRot, clock, 0.35f);
-                yield return null;
+                yield return null; if (this == null) { if (next != null) Destroy(next.gameObject); yield break; }
             }
             mat.SetFloat("_Dissolve", 0f);
             foreach (var r in oldBody) if (r != null) r.enabled = false;
@@ -280,7 +280,7 @@ namespace NightPages
                     lastSound = fi;
                     Sfx.At(rng.NextDouble() < 0.6 ? "crack" : "creak", home + Vector3.up * 1.2f, 0.5f, 0.55f + (float)rng.NextDouble() * 0.5f);
                 }
-                yield return null;
+                yield return null; if (this == null) { if (next != null) Destroy(next.gameObject); yield break; }
             }
             // It settles into what it is now.
             for (float h = 0f; h < 0.5f; h += Time.deltaTime)
@@ -290,7 +290,7 @@ namespace NightPages
                 mat.SetFloat("_Writhe", 0.3f * k);
                 Heave(home, homeRot, clock, 0.35f * k);
                 shapeGo.transform.localScale = Vector3.Lerp(Vector3.one, shapeGo.transform.localScale, k);
-                yield return null;
+                yield return null; if (this == null) { if (next != null) Destroy(next.gameObject); yield break; }
             }
             if (GameDirector.I != null) GameDirector.I.Log("monster: transformation shapes took " + job.seconds.ToString("0.0") + " s to work out");
             transform.SetPositionAndRotation(home, homeRot);
@@ -311,7 +311,7 @@ namespace NightPages
                 mat.SetFloat("_Dissolve", Mathf.Clamp01(h / 0.55f));
                 float k = Mathf.SmoothStep(0f, 1f, h / 0.8f);
                 foreach (var kv in surfacing) if (kv.Key != null) kv.Key.localScale = kv.Value * k;
-                yield return null;
+                yield return null; if (this == null) { if (next != null) Destroy(next.gameObject); yield break; }
             }
             foreach (var kv in surfacing) if (kv.Key != null) kv.Key.localScale = kv.Value;
             Destroy(shapeGo);
@@ -323,6 +323,7 @@ namespace NightPages
         // A slow heave of the whole body: it sways and lists as if its weight keeps shifting. Smooth noise, not a jitter.
         void Heave(Vector3 home, Quaternion homeRot, float clock, float amount)
         {
+            if (this == null) return;          // gone mid-change (the dream ended): the coroutine may run on someone else
             float s = seed * 0.73f;
             Vector3 drift = new Vector3(Mathf.PerlinNoise(clock * 0.9f, s) - 0.5f, (Mathf.PerlinNoise(clock * 1.3f, s + 5f) - 0.5f) * 0.5f, Mathf.PerlinNoise(clock * 0.8f, s + 9f) - 0.5f) * 0.06f * amount;
             var tilt = Quaternion.Euler((Mathf.PerlinNoise(clock * 1.1f, s + 13f) - 0.5f) * 10f * amount,
@@ -401,56 +402,6 @@ namespace NightPages
             return g.transform;
         }
 
-        // An arm hanging from a pivot at the shoulder: rotate the pivot and the whole arm swings from its top.
-        // Upper arm, elbow a little bent, a thinner forearm, a narrow hand and fingers a little too long.
-        Transform Limb(string name, Transform parent, Vector3 at, float length, float thick)
-        {
-            var pivot = Node(name, parent, at);
-            float upper = length * 0.47f, fore = length * 0.43f;
-            Part(PrimitiveType.Sphere, "Shoulder", pivot, Vector3.zero, Vector3.one * thick * 1.45f);
-            Part(PrimitiveType.Capsule, "Upper arm", pivot, new Vector3(0f, -upper / 2f, 0f), new Vector3(thick * 1.15f, upper / 2f, thick * 1.05f));
-            var elbow = Node("Elbow", pivot, new Vector3(0f, -upper, 0f));
-            elbow.localRotation = Quaternion.Euler(-14f, 0f, 0f);
-            Part(PrimitiveType.Sphere, "Joint", elbow, Vector3.zero, Vector3.one * thick * 1.15f);
-            Part(PrimitiveType.Capsule, "Forearm", elbow, new Vector3(0f, -fore / 2f, 0f), new Vector3(thick * 0.85f, fore / 2f, thick * 0.75f));
-            var wrist = Node("Wrist", elbow, new Vector3(0f, -fore, 0f));
-            Hand(wrist, thick, length * 0.12f);
-            return pivot;
-        }
-
-        // A palm and four long fingers, slightly curled, and a thumb. Needles instead, if it has those.
-        void Hand(Transform wrist, float thick, float fingerLen)
-        {
-            Part(PrimitiveType.Sphere, "Palm", wrist, new Vector3(0f, -thick * 0.9f, 0f), new Vector3(thick * 1.3f, thick * 1.9f, thick * 0.6f));
-            if (extraG == XNeedles) return;
-            for (int i = 0; i < 4; i++)
-            {
-                float fx = (i - 1.5f) * thick * 0.32f;
-                float len = fingerLen * (i == 0 || i == 3 ? 0.8f : 1f);
-                Vector3 knuckle = new Vector3(fx, -thick * 1.75f, 0f);
-                Vector3 mid = knuckle + new Vector3(fx * 0.2f, -len * 0.55f, len * 0.12f);
-                Vector3 tip = mid + new Vector3(fx * 0.1f, -len * 0.45f, len * 0.3f);
-                Bone(wrist, knuckle, mid, thick * 0.24f);
-                Bone(wrist, mid, tip, thick * 0.19f);
-            }
-            Bone(wrist, new Vector3(thick * 0.55f, -thick * 0.9f, thick * 0.2f), new Vector3(thick * 0.75f, -thick * 1.9f, fingerLen * 0.4f), thick * 0.24f);
-        }
-
-        // A leg from the hip: thigh, a knee bent a little forward, shin, a long flat foot.
-        void Leg(Transform parent, float x, float legs, float thick)
-        {
-            Vector3 hip = new Vector3(x, legs, 0f), knee = new Vector3(x * 1.05f, legs * 0.5f, 0.06f), ankle = new Vector3(x, 0.08f, -0.02f);
-            // Jointed at the hip and the knee, so it can walk.
-            var hipJ = Node("Hip", parent, hip);
-            var kneeJ = Node("Knee joint", hipJ, knee - hip);
-            Bone(hipJ, Vector3.zero, knee - hip, thick * 1.15f);
-            Part(PrimitiveType.Sphere, "Knee", kneeJ, Vector3.zero, Vector3.one * thick * 1.05f);
-            Bone(kneeJ, Vector3.zero, ankle - knee, thick * 0.85f);
-            Part(PrimitiveType.Sphere, "Foot", kneeJ, new Vector3(x, 0.045f, 0.07f) - knee, new Vector3(thick * 0.95f, 0.08f, 0.26f));
-            hips.Add(hipJ);
-            knees.Add(kneeJ);
-        }
-
         // Ribs, spine and collarbones showing through tight skin.
         void Bones(float trunk, float width, float half)
         {
@@ -480,6 +431,9 @@ namespace NightPages
             for (int i = 0; i < Traits && i < newLook.Length; i++) look[i] = newLook[i];
             if (rig != null) { FreeMeshes(); Destroy(rig.gameObject); }
             arms.Clear(); armRest.Clear(); legPivots.Clear(); hips.Clear(); knees.Clear(); chain.Clear(); swarm.Clear(); swarmHome.Clear();
+            fine.Clear();
+            ResetMotion();
+            if (limbSkin != null) { Destroy(limbSkin); limbSkin = null; }
             bodyRends.Clear(); eyeRends.Clear(); ribs.Clear(); ribRest.Clear(); mouths.Clear();
             torso = neck = headT = null;
             rig = new GameObject("Rig").transform;
@@ -576,11 +530,13 @@ namespace NightPages
             if (walksOnArms) armLen = shoulderHeight;
             float half = width * 0.55f + 0.1f;          // arms hang clear of the body
             int armGene = look[Arms];
-            if (plan == OnHands && armGene == 4) armGene = 0;      // it has to walk on something
+            if (plan == OnHands && (armGene == 4 || armGene >= 6)) armGene = 0;      // it has to walk on something (hands)
             switch (armGene)
             {
                 case 0:
                 case 5:
+                case 6:
+                case 7:
                     AddArm(new Vector3(-half, trunk, 0f), armLen, hang, 8f);
                     AddArm(new Vector3(half, trunk, 0f), armLen, hang, -8f);
                     break;
@@ -662,21 +618,22 @@ namespace NightPages
         // A spider's abdomen and eight legs with the knees above its back.
         void LowerSpider(float s, out Transform waist, out Transform head)
         {
-            Part(PrimitiveType.Sphere, "Abdomen", rig, new Vector3(0f, 0.6f, -0.45f) * s, new Vector3(0.8f, 0.65f, 0.95f) * s);
-            Part(PrimitiveType.Sphere, "Thorax", rig, new Vector3(0f, 0.52f, 0.18f) * s, new Vector3(0.5f, 0.4f, 0.55f) * s);
+            // The abdomen (a big egg, behind), the narrow waist, the cephalothorax (flatter, in front).
+            Ell(rig, "Abdomen", new Vector3(0f, 0.62f, -0.5f) * s, new Vector3(0.78f, 0.62f, 0.95f) * s, Quaternion.Euler(-12f, 0f, 0f));
+            Ell(rig, "Spinnerets", new Vector3(0f, 0.5f, -0.95f) * s, new Vector3(0.14f, 0.12f, 0.14f) * s, Quaternion.identity, 0.7f);
+            Seg(rig, "Pedicel", new Vector3(0f, 0.55f, -0.12f) * s, new Vector3(0f, 0.53f, -0.02f) * s, 0.07f * s, 0.07f * s, 0.6f);
+            Ell(rig, "Cephalothorax", new Vector3(0f, 0.53f, 0.18f) * s, new Vector3(0.52f, 0.3f, 0.58f) * s, Quaternion.Euler(6f, 0f, 0f));
+            // Eight legs, four a side, fanned: the front pair longest and reaching forward, the third pair shortest.
+            float[] reach = { 1.45f, 1.3f, 1.1f, 1.38f };
             for (int i = 0; i < 8; i++)
             {
                 float side = i < 4 ? -1f : 1f;
-                float fan = Mathf.Lerp(-55f, 55f, (i % 4) / 3f) * Mathf.Deg2Rad;
+                int k = i % 4;
+                float fan = Mathf.Lerp(62f, -58f, k / 3f) * Mathf.Deg2Rad;
                 Vector3 dir = new Vector3(side * Mathf.Cos(fan), 0f, Mathf.Sin(fan));
-                Vector3 hip = new Vector3(side * 0.2f, 0.52f, 0.15f) * s;
-                Vector3 knee = hip + (dir * 0.75f + Vector3.up * 0.5f) * s;
-                Vector3 foot = hip + dir * 1.35f * s;
-                foot.y = 0f;
+                Vector3 hip = new Vector3(side * 0.17f, 0.5f, 0.18f + (1.5f - k) * 0.07f) * s;
                 var legPivot = Node("Leg", rig, Vector3.zero);
-                Bone(legPivot, hip, knee, 0.05f * s);
-                Bone(legPivot, knee, foot, 0.04f * s);
-                legPivots.Add(legPivot);
+                SpiderLeg(legPivot, hip, dir, reach[k] * s, 0.42f * s, 0.085f * s * (k == 2 ? 0.9f : 1f));
             }
             waist = Node("Waist", rig, new Vector3(0f, 0.7f, 0.25f) * s);
             head = Node("Head", rig, new Vector3(0f, 0.55f, 0.45f) * s);
@@ -685,15 +642,38 @@ namespace NightPages
         // Four long legs and a long low body, like a dog nearly.
         void LowerFour(float s, out Transform waist, out Transform head)
         {
-            var body = Part(PrimitiveType.Capsule, "Body", rig, new Vector3(0f, 0.85f, 0f) * s, new Vector3(0.42f, 0.7f, 0.42f) * s);
-            body.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
-            Vector3[] hips = { new Vector3(-0.15f, 0.8f, 0.5f), new Vector3(0.15f, 0.8f, 0.5f), new Vector3(-0.15f, 0.8f, -0.5f), new Vector3(0.15f, 0.8f, -0.5f) };
+            // A deep chest and a tucked-up belly, like a starved dog's; the spine showing along the top.
+            Ell(rig, "Chest", new Vector3(0f, 0.86f, 0.32f) * s, new Vector3(0.4f, 0.48f, 0.62f) * s, Quaternion.Euler(-8f, 0f, 0f));
+            Seg(rig, "Belly", new Vector3(0f, 0.9f, 0.1f) * s, new Vector3(0f, 0.86f, -0.5f) * s, 0.17f * s, 0.13f * s);
+            Ell(rig, "Haunch", new Vector3(0f, 0.86f, -0.52f) * s, new Vector3(0.36f, 0.34f, 0.4f) * s, Quaternion.identity);
+            for (int i = 0; i < 8; i++) Ell(rig, "Vertebra", new Vector3(0f, 1.08f - i * 0.004f, 0.42f - i * 0.12f) * s, new Vector3(0.06f, 0.05f, 0.06f) * s, Quaternion.identity, 0.6f);
             for (int i = 0; i < 4; i++)
             {
                 var leg = Node("Leg", rig, Vector3.zero);
-                Vector3 hip = hips[i] * s, knee = hip + new Vector3(0f, -0.42f, i < 2 ? -0.08f : 0.12f) * s, foot = new Vector3(hip.x, 0f, hip.z + (i < 2 ? 0.05f : -0.05f) * s);
-                Bone(leg, hip, knee, 0.08f * s);
-                Bone(leg, knee, foot, 0.06f * s);
+                bool front = i < 2;
+                float side = i % 2 == 0 ? -1f : 1f;
+                Vector3 hip = new Vector3(side * 0.13f, 0.82f, front ? 0.45f : -0.55f) * s;
+                if (front)
+                {
+                    // A foreleg: the shoulder muscle, the long forearm straight down, the wrist, the paw.
+                    Vector3 elbow = hip + new Vector3(0f, -0.36f, -0.06f) * s, wrist = new Vector3(hip.x, 0.1f * s, hip.z + 0.02f * s), paw = new Vector3(hip.x, 0.03f * s, hip.z + 0.1f * s);
+                    Ell(leg, "Shoulder", hip + new Vector3(0f, -0.08f, 0f) * s, new Vector3(0.16f, 0.32f, 0.2f) * s, Quaternion.identity);
+                    Seg(leg, "Upper foreleg", hip, elbow, 0.07f * s, 0.05f * s);
+                    Seg(leg, "Foreleg", elbow, wrist, 0.045f * s, 0.03f * s);
+                    Seg(leg, "Pastern", wrist, paw, 0.03f * s, 0.035f * s, 0.8f);
+                    Ell(leg, "Paw", paw, new Vector3(0.09f, 0.05f, 0.11f) * s, Quaternion.identity);
+                }
+                else
+                {
+                    // A hind leg: the thigh, the stifle forward, the long shank back to the hock, the hock straight down.
+                    Vector3 stifle = hip + new Vector3(0f, -0.3f, 0.14f) * s, hock = new Vector3(hip.x, 0.24f * s, hip.z - 0.18f * s), paw = new Vector3(hip.x, 0.03f * s, hip.z - 0.12f * s);
+                    Ell(leg, "Thigh muscle", Vector3.Lerp(hip, stifle, 0.4f), new Vector3(0.17f, 0.36f, 0.24f) * s, Quaternion.FromToRotation(Vector3.up, (hip - stifle).normalized));
+                    Seg(leg, "Thigh", hip, stifle, 0.08f * s, 0.055f * s);
+                    Seg(leg, "Shank", stifle, hock, 0.05f * s, 0.03f * s);
+                    Ell(leg, "Hock", hock, Vector3.one * 0.065f * s, Quaternion.identity, 0.6f);
+                    Seg(leg, "Metatarsus", hock, paw, 0.03f * s, 0.033f * s, 0.8f);
+                    Ell(leg, "Paw", paw, new Vector3(0.09f, 0.05f, 0.11f) * s, Quaternion.identity);
+                }
                 legPivots.Add(leg);
             }
             waist = Node("Waist", rig, new Vector3(0f, 1.0f, 0.55f) * s);
@@ -748,10 +728,9 @@ namespace NightPages
                 for (int side = -1; side <= 1; side += 2)
                 {
                     var leg = Node("Leg", rig, Vector3.zero);
-                    Vector3 hip = new Vector3(side * r * 0.5f, y, z), knee = hip + new Vector3(side * 0.22f, 0.12f, 0.03f) * s, foot = new Vector3(side * (r * 0.5f + 0.38f * s), 0f, z + 0.05f * s);
-                    Bone(leg, hip, knee, 0.035f * s);
-                    Bone(leg, knee, foot, 0.03f * s);
-                    legPivots.Add(leg);
+                    Vector3 hip = new Vector3(side * r * 0.5f, y, z);
+                    // A centipede's leg: short, jointed, hooked at the tip; built like a small spider's leg.
+                    SpiderLeg(leg, hip, new Vector3(side, 0f, 0.15f), 0.5f * s, 0.16f * s, 0.05f * s);
                 }
             }
             waist = Node("Waist", rig, new Vector3(0f, 0.45f, 0.75f) * s);
@@ -791,16 +770,32 @@ namespace NightPages
             {
                 // Bending the wrong way: the forearm folds back and up from the elbow.
                 a = Node("Arm", torso, at);
-                float upper = length * 0.5f;
-                Part(PrimitiveType.Capsule, "Bone", a, new Vector3(0f, -upper / 2f, 0f), new Vector3(0.075f, upper / 2f, 0.075f));
+                float upper = length * 0.5f, side = at.x < 0f ? -1f : 1f, r = 0.045f;
+                Ell(a, "Deltoid", new Vector3(side * 0.01f, -upper * 0.1f, 0f), new Vector3(r * 2.6f, upper * 0.42f, r * 2.4f), Quaternion.identity);
+                Seg(a, "Upper arm", Vector3.zero, new Vector3(0f, -upper, 0f), r * 0.95f, r * 0.7f);
+                Ell(a, "Biceps", new Vector3(0f, -upper * 0.5f, r * 0.38f), new Vector3(r * 1.5f, upper * 0.55f, r * 1.3f), Quaternion.identity);
                 var elbow = Node("Elbow", a, new Vector3(0f, -upper, 0f));
                 elbow.localRotation = Quaternion.Euler(-150f, 0f, 0f);
-                Part(PrimitiveType.Sphere, "Joint", elbow, Vector3.zero, Vector3.one * 0.1f);
-                Part(PrimitiveType.Capsule, "Bone", elbow, new Vector3(0f, -upper / 2f, 0f), new Vector3(0.065f, upper / 2f, 0.065f));
-                Part(PrimitiveType.Sphere, "Hand", elbow, new Vector3(0f, -upper, 0f), new Vector3(0.11f, 0.18f, 0.11f));
+                // The elbow, bent the way an elbow doesn't: the joint swollen, the skin stretched over it.
+                Ell(elbow, "Joint", Vector3.zero, new Vector3(r * 2.1f, r * 1.8f, r * 2.3f), Quaternion.identity, 0.7f);
+                Seg(elbow, "Forearm", Vector3.zero, new Vector3(0f, -upper * 0.95f, 0f), r * 0.82f, r * 0.48f);
+                Ell(elbow, "Flexors", new Vector3(0f, -upper * 0.27f, r * 0.12f), new Vector3(r * 1.7f, upper * 0.5f, r * 1.45f), Quaternion.identity);
+                var wrist = Node("Wrist", elbow, new Vector3(0f, -upper * 0.95f, 0f));
+                Hand(wrist, r, length * 0.2f, side);
+            }
+            else if (look[Arms] == 6) a = MantisArm(torso, at, length * 1.15f, at.x < 0f ? -1f : 1f);
+            else if (look[Arms] == 7)
+            {
+                // A spider's leg where the arm should be: up from the shoulder, the knee over its head, down to the floor.
+                a = Node("Arm", torso, at);
+                Vector3 shoulderWorld = torso.TransformPoint(at) - transform.position;
+                float drop = Mathf.Max(0.4f, shoulderWorld.y / Mathf.Max(0.01f, transform.lossyScale.y));
+                var holder = Node("Leg holder", a, Vector3.zero);
+                // (Built level: the arm's resting angle undoes the torso's lean, as it does for hanging arms.)
+                SpiderLeg(holder, Vector3.zero, new Vector3(at.x < 0f ? -1f : 1f, 0f, 0.35f), drop * 1.1f, 0.45f, 0.11f, -drop, false);
             }
             else a = Limb("Arm", torso, at, length, 0.075f);
-            Transform hand = look[Arms] == 5 ? a.Find("Elbow") : a.Find("Elbow/Wrist");
+            Transform hand = look[Arms] == 5 ? a.Find("Elbow") : look[Arms] >= 6 ? a : a.Find("Elbow/Wrist");
             if (hand == null) hand = a;
             if (extraG == XNeedles)
             {
@@ -1068,7 +1063,8 @@ namespace NightPages
             float t0 = Time.realtimeSinceStartup;
             try
             {
-                var body = Flesh.Skin(rig, skin, 0.025f, blend, rough, "Flesh");
+                var body = Flesh.Skin(rig, skin, 0.022f, blend, rough, "Flesh");
+                MeltFine(rough);
                 bool paintedHead = headG == HDoll || headG == HClown;
                 if (headSkin != skin) Flesh.Skin(rig, headSkin, 0.016f, paintedHead ? 0.015f : 0.025f, rough * 0.6f, "Flesh (head)");
                 if (body != null && GameDirector.I != null && (Time.realtimeSinceStartup - t0) > 0.25f)
@@ -1109,6 +1105,9 @@ namespace NightPages
                 if (rig == null) return;
             }
 
+            float dtm = Mathf.Max(Time.deltaTime, 1e-4f);
+            if (MotionPre(t, dtm)) return;                                    // a held frame: it stutters, like film with frames missing
+
             // How it is moving (whatever moves it: the house's hunts, the dream's, a test).
             Vector3 now = transform.position;
             float moved = hasLast ? (now - lastPos).magnitude : 0f;            // (up a wall counts)
@@ -1122,10 +1121,10 @@ namespace NightPages
             stride += moved / stepLen * Mathf.PI * (1f + 0.25f * Mathf.Sin(t * 3.1f));
 
             // Everything breathes a little, so it never reads as a statue.
-            float breathe = 1f + 0.015f * Mathf.Sin(t * 1.3f);
+            float breathe = Breath(t);
             rig.localScale = new Vector3(warp.x, warp.y * breathe, warp.z);
             // The body rises and falls with each step and leans into the way it goes.
-            float bob = Mathf.Abs(Mathf.Sin(stride)) * 0.045f * go;
+            float bob = Mathf.Abs(Mathf.Sin(stride)) * 0.045f * go * (gait == GaitGlide ? 0.05f : 1f);
             rig.localPosition = new Vector3(Mathf.Sin(stride * 0.5f) * 0.025f * go, bob, 0f);
             if (chain.Count > 0) PoseSnake(t);
             for (int i = 0; i < swarm.Count; i++)
@@ -1156,13 +1155,39 @@ namespace NightPages
                 float swing = Mathf.Sin(ph) * 16f * go, lift = Mathf.Max(0f, Mathf.Cos(ph)) * 9f * go;
                 legPivots[i].localRotation = Quaternion.Euler(Mathf.Sin(t * 2.2f + i * 1.7f) * (gait == 0 ? 1.5f : 5f) * (1f - go) - lift, swing, Mathf.Cos(t * 1.9f + i) * (gait == 0 ? 1f : 4f) * (1f - go));
             }
+            // Standing, it shifts its weight from one leg to the other now and then, one knee giving a little: never
+            // a statue. (Looked at, it stops even that.)
+            float shift = Mathf.Sin(t * 0.45f + seed) * (1f - go) * (1f - freezeW * 0.8f);
             for (int i = 0; i < hips.Count; i++)
             {
                 // Two legs: hip forward and back, the knee folding as the foot comes through.
                 float ph = stride + i * Mathf.PI;
-                hips[i].localRotation = Quaternion.Euler(-Mathf.Sin(ph) * 30f * go, 0f, 0f);
-                knees[i].localRotation = Quaternion.Euler(Mathf.Max(0f, Mathf.Sin(ph + 1.2f)) * 55f * go, 0f, 0f);
+                float sideSign = i == 0 ? 1f : -1f;
+                float rest = Mathf.Max(0f, shift * sideSign);                       // the knee that's resting bends
+                float hipX, kneeX, hipZ = 0f;
+                if (gait == GaitLimp && i == 1)
+                {
+                    // The bad leg: it swings late and stiff from the hip, the knee hardly bending, the foot dragged
+                    // through rather than lifted; the body drops onto the good one.
+                    hipX = -Mathf.Sin(ph - 0.6f) * 22f * go;
+                    kneeX = Mathf.Max(0f, Mathf.Sin(ph + 0.4f)) * 12f * go;
+                    hipZ = 6f * go;                                                  // swung out to the side
+                }
+                else if (gait == GaitGlide)
+                {
+                    // Gliding: little shuffling steps, the knees soft, far too small for how fast it goes.
+                    hipX = -Mathf.Sin(ph * 1.6f) * 9f * go;
+                    kneeX = (8f + Mathf.Max(0f, Mathf.Sin(ph * 1.6f + 1.2f)) * 14f) * go;
+                }
+                else
+                {
+                    hipX = -Mathf.Sin(ph) * 30f * go;
+                    kneeX = Mathf.Max(0f, Mathf.Sin(ph + 1.2f)) * 55f * go + (gait == GaitLimp ? 10f * go : 0f);
+                }
+                hips[i].localRotation = Quaternion.Euler(hipX - rest * 6f, 0f, hipZ * sideSign + shift * 1.5f);
+                knees[i].localRotation = Quaternion.Euler(kneeX + rest * 14f + (breathe - 1f) * 40f, 0f, 0f);
             }
+            LegsIK(dtm, go);
             // Ribs that open, a little, and close again.
             if (extraG == XRibs)
             {
@@ -1174,6 +1199,7 @@ namespace NightPages
             Quaternion sway = Quaternion.identity;
             if (gait == 1) sway = Quaternion.Euler(0f, 0f, Mathf.Sin(t * 0.8f) * 5f);
             // Grandma's hair: whatever way the rest of the game turns it to face you, she has her back to you.
+            sway *= BodyRock(t, go);
             rig.localRotation = headG == HGrandma && torsoOn && plan == TwoLegs ? sway * Quaternion.Euler(0f, 180f, 0f) : sway;
 
             Quaternion headExtra = Quaternion.identity;
@@ -1205,27 +1231,37 @@ namespace NightPages
                     float rate = t < snapUntil ? 30f : 2.2f;
                     watchYaw = Mathf.Lerp(watchYaw, yaw, Time.deltaTime * rate);
                     watchPitch = Mathf.Lerp(watchPitch, pitch, Time.deltaTime * rate);
-                    headExtra = Quaternion.Euler(watchPitch * watchW, watchYaw * watchW, 0f) * headExtra;
+                    // And now and then it tilts its head at you, slowly, holds it, and snaps it back.
+                    float roll = Tilt(t, watchW > 0.6f && far > 1.4f && far < 7f);
+                    headExtra = Quaternion.Euler(watchPitch * watchW, watchYaw * watchW, roll * watchW) * headExtra;
                 }
             }
 
             bool twitching = false;
             if (gait == 2)
             {
-                if (t > nextTwitch) { twitchUntil = t + 0.09f; nextTwitch = t + Random.Range(0.5f, 2.6f); }
+                if (t > nextTwitch)
+                {
+                    twitchUntil = t + 0.09f; nextTwitch = t + Random.Range(0.5f, 2.6f);
+                    if (Random.value < 0.4f) Sfx.At("crack", HeadPos, 0.3f, 0.9f + Random.value * 0.4f);    // its joints, cracking
+                }
                 twitching = t < twitchUntil;
             }
             twitching |= shudder;
             if (!torsoOn) return;
             if (neck != null)
                 neck.localRotation = neckRest * headExtra * (twitching ? Quaternion.Euler(Random.Range(-30f, 30f), Random.Range(-40f, 40f), Random.Range(-35f, 35f)) : Quaternion.identity);
+            Vector3 accel = BodyAccel(dtm);
+            float strike = Strike(t);
+            float still = 1f - freezeW;                                      // looked at, it stops: only the head moves
             for (int i = 0; i < arms.Count; i++)
             {
-                var idle = Quaternion.Euler(Mathf.Sin(t * 0.7f + i) * 2.5f, 0f, 0f);
+                var idle = Quaternion.Euler(Mathf.Sin(t * 0.7f + i) * 2.5f * still + ArmLag(i, dtm, accel) + strike, 0f, 0f);
                 // Walking: arms swing against the legs. On its hands: they ARE the legs, big strides, hand over hand.
                 bool walksOnThem = plan == OnHands || look[Body] == 3;
                 float aph = stride + (i % 2 == 0 ? Mathf.PI : 0f) + (i / 2) * 0.8f;
-                idle *= Quaternion.Euler(Mathf.Sin(aph) * (walksOnThem ? 34f : 22f) * go, 0f, 0f);
+                // (Hanging arms barely swing: they're dead weight, and they come late. Ones it walks on, hand over hand.)
+                idle *= Quaternion.Euler(Mathf.Sin(aph) * (walksOnThem ? 34f : 10f) * go * still, 0f, 0f);
                 arms[i].localRotation = armRest[i] * idle * (twitching ? Quaternion.Euler(Random.Range(-25f, 25f), 0f, Random.Range(-20f, 20f)) : Quaternion.identity);
             }
         }

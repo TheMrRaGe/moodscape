@@ -127,7 +127,7 @@ namespace NightPages
             var summary = new StringBuilder("{\n");
             if (Tour.Mode == "tour") yield return CaptureTour(summary);
             else if (Tour.Mode == "video") yield return MonsterVideo(summary);
-            else if (Tour.Mode == "studio") yield return StudioFilm(summary);
+            else if (Tour.Mode == "studio") yield return StudioStills(summary);       // (StudioFilm: the older film of the forms and the furniture)
             else if (Tour.Mode == "demo") yield return DemoFilm(summary);
             else yield return BotRuns(summary);
             summary.Append("  \"errors\": ").Append(Tour.Errors.Count).Append(",\n");
@@ -381,6 +381,8 @@ namespace NightPages
             chores.CompleteAll();
             OnChoreDone();
             script.AutoWrite(day);
+            clock.JumpTo(DayClock.Dusk + 60f);
+            house.SetTime(1, day);
             yield return Settle(1f);
             yield return Pose(R("living room", 2.3f, -1.3f), R("living room", 6.6f, -5f), 6f, "evening living room");
             yield return Pose(new Vector3(0f, 0f, 6.6f), new Vector3(0f, 0f, -6f), 0f, "evening hall");
@@ -916,16 +918,26 @@ namespace NightPages
             yield return null;
         }
 
+        // Walk to each chore the way a player would, then do it the quick way (a bot has no mouse to scrub with).
         IEnumerator DoChores()
         {
             foreach (var c in new List<Chore>(chores.today))
             {
-                if (c.done || phase != Phase.Morning) continue;
-                Interactable target;
-                if (!house.choreTargets.TryGetValue(c.id, out target)) { Problem("chore '" + c.text + "' has nothing to use"); continue; }
-                yield return GoUse(target, c.text);
-                if (!c.done) Problem("chore '" + c.text + "': using it didn't do it");
+                if (c.done || c.from > DayClock.Noon) continue;
+                if (c.where != null)
+                {
+                    Vector3 at = c.where();
+                    var stand = StandNear(at);
+                    if (stand.HasValue) yield return WalkTo(stand.Value, c.text);
+                    else Problem("chore '" + c.text + "': nowhere to stand near it");
+                }
+                if (c.from > clock.minutes) clock.JumpTo(c.from);
+                try { if (c.auto != null) c.auto(); }
+                catch (System.Exception e) { Problem("chore '" + c.text + "': doing it threw " + e.Message); }
+                for (int f = 0; f < 3 && !c.done; f++) { yield return null; chores.Tick(); }
+                if (!c.done) Problem("chore '" + c.text + "': doing it didn't finish it");
                 hud.modal = Modal.None;
+                player.frozen = false;
             }
         }
 
@@ -966,16 +978,27 @@ namespace NightPages
                             }
                             // Do the chores the way a player would: walk there, look at the thing, use it.
                             yield return DoChores();
-                            if (phase == Phase.Morning && !chores.AllDone)
+                            if (phase == Phase.Morning && !chores.MorningDone)
                             {
-                                Problem("day " + day + ": chores still undone after walking to every one");
+                                Problem("day " + day + ": morning chores still undone after walking to every one");
                                 chores.CompleteAll();
                                 OnChoreDone();
                             }
+                            clock.JumpTo(DayClock.Noon);
+                            yield return null;
                             break;
                         case Phase.Afternoon:
-                            yield return GoUse(house.typewriter, "the typewriter", false);
-                            script.AutoWrite(day);
+                            if (!workDone)
+                            {
+                                var station = job.Id == "transcriber" ? house.deck : job.Id == "darkroom" ? house.enlarger : job.Id == "phone" ? house.phone : house.typewriter;
+                                yield return GoUse(station, "the work (" + job.Name + ")", false);
+                                script.AutoWrite(day);
+                                if (!workDone) Problem("day " + day + ": the work isn't done after doing it");
+                            }
+                            yield return DoChores();
+                            chores.CompleteAll();
+                            clock.JumpTo(DayClock.Dusk);
+                            yield return null;
                             break;
                         case Phase.Evening:
                             if (brave)
@@ -986,6 +1009,7 @@ namespace NightPages
                                 if (day >= 6) UseCellar();
                             }
                             yield return GoUse(house.bed, "the bed", false);
+                            clock.JumpTo(DayClock.BedFrom);
                             int sleptOn = day;
                             StartCoroutine(Sleep());
                             // (a dream can end almost at once if it reaches you, so a new day also counts as "it happened")

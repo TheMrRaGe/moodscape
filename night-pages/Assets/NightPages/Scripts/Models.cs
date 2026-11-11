@@ -16,6 +16,30 @@ namespace NightPages
         /// </summary>
         public static bool FrontIsPlusZ = false;
 
+        /// <summary>
+        /// Models whose front isn't where the rest face (they came from different makers): the extra turn, in degrees,
+        /// that makes each one face the way it's asked to. Found by photographing every model facing the camera
+        /// (the "studio" job's model chart).
+        /// </summary>
+        public static readonly Dictionary<string, float> YawFix = new Dictionary<string, float>
+        {
+            { "Shelf_01", 180f },                    // its white back faced the room
+            { "painted_wooden_shelves", 180f },
+            { "GothicCabinet_01", 90f },             // came in sideways
+            { "painted_wooden_cabinet_02", 180f },   // the wardrobe: its back faced the room
+            { "Rockingchair_01", -90f },             // came in sideways
+            { "vintage_day_bed", 180f }, { "vintage_wooden_drawer_01", 180f }, { "painted_wooden_cabinet", 180f },
+            { "vintage_telephone_wall_clock", 180f },
+            { "wheelchair_01", 180f },
+            { "BarberShopChair_01", 90f },
+            // These came in back to front: sofas with their backs to the fire, the TV facing the wall.
+            { "sofa_03", 180f }, { "Sofa_01", 180f }, { "sofa_02", 180f }, { "painted_wooden_sofa", 180f },
+            { "ArmChair_01", 180f }, { "mid_century_lounge_chair", 180f }, { "dining_chair_02", 180f },
+            { "Television_01", 180f },
+        };
+
+        public static float Fix(string id) { float f; return id != null && YawFix.TryGetValue(id, out f) ? f : 0f; }
+
         static readonly Dictionary<string, GameObject> cache = new Dictionary<string, GameObject>();
         static readonly HashSet<string> missing = new HashSet<string>();
 
@@ -71,6 +95,8 @@ namespace NightPages
             wrap.transform.localRotation = Quaternion.Euler(0f, yaw, 0f);
             var inst = Object.Instantiate(prefab, wrap.transform);      // keeps whatever rotation and scale the import gave it
             inst.name = "Model";
+            float fix = Fix(id);
+            if (fix != 0f) inst.transform.localRotation = Quaternion.Euler(0f, fix, 0f) * inst.transform.localRotation;
             foreach (var c in inst.GetComponentsInChildren<Collider>()) Object.Destroy(c);
             foreach (var a in inst.GetComponentsInChildren<Animator>()) a.enabled = false;
 

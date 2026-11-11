@@ -14,6 +14,9 @@ namespace NightPages
         public Door door;
         public GameObject seal;        // a stretch of wall that can replace the doorway ("the door is gone")
         public float darkUntil;        // a haunting can kill this room's light for a while
+        public bool lit;               // its lamp is switched on
+        public Light extra;            // a second lamp on the same switch (the hall has two)
+        public Interactable lightSwitch;
     }
 
     /// <summary>
@@ -23,7 +26,7 @@ namespace NightPages
     /// plain boxes when they aren't. Small things can be picked up and moved.
     /// Layout: a central hall with a study, kitchen, bedroom and living room, and a cellar underneath.
     /// </summary>
-    public class House : MonoBehaviour
+    public partial class House : MonoBehaviour
     {
         public static House I;
 
@@ -61,6 +64,7 @@ namespace NightPages
 
         class Window { public Material pane; public Light glow; }
         readonly List<Material> shades = new List<Material>();
+        readonly List<Vector3> shadeAt = new List<Vector3>();
         readonly List<Window> windows = new List<Window>();
         /// <summary>Every window: its centre and the direction into the room (the hallucinations use these).</summary>
         public readonly List<KeyValuePair<Vector3, Vector3>> windowSpots = new List<KeyValuePair<Vector3, Vector3>>();
@@ -153,6 +157,11 @@ namespace NightPages
         /// <summary>A fixed piece of furniture: the model if it's installed, otherwise a box of the same size.</summary>
         GameObject Furn(string model, string name, Vector3 pos, Vector3 size, Color c, float yaw = 0f)
         {
+            // Nobody sets furniture down dead square: a degree or three off, more for the free-standing pieces.
+            bool againstWall = false;
+            foreach (var w in new[] { "Clock", "Fridge", "Cabinet", "Wardrobe", "Bookshelf", "Dresser", "Radio", "Console", "Heater", "Sideboard", "Shelves", "Desk", "Pantry", "Hall table", "Nightstand" })
+                if (name.Contains(w)) againstWall = true;
+            yaw += Lived(againstWall ? 0.8f : 3.5f);
             string asked = model;
             model = Catalogue.Swap(model);
             // A swapped piece is held to the footprint the room was planned for (the original may overhang a little).
@@ -174,6 +183,10 @@ namespace NightPages
             string asked = model;
             model = Catalogue.Swap(model);
             if (model != asked && model != null) height = ModelSizes.Height(model, height);
+            // Put down by a person: chairs left where someone got up (turned, pushed back a little), small things at
+            // whatever angle they landed and a finger's width off where they 'should' be.
+            if (mass >= 4f) { yaw += Lived(12f); floorPoint += new Vector3(Random.Range(-0.06f, 0.06f), 0f, Random.Range(-0.06f, 0.06f)); }
+            else if (mass < 3f) { yaw += Lived(35f); floorPoint += new Vector3(Random.Range(-0.025f, 0.025f), 0f, Random.Range(-0.025f, 0.025f)); }
             Vector3 at = P(floorPoint);
             yaw = Yaw(yaw);
             Movable m = model == null ? null : ModelsLoose.Place(model, transform, at, ModelSizes.Height(model, height), yaw, mass, Mathf.Max(fallbackSize.x, fallbackSize.z) * 1.3f);
@@ -206,13 +219,19 @@ namespace NightPages
             var size = ModelSizes.All.ContainsKey(model) ? ModelSizes.All[model] : new Vector3(0.4f, 0.4f, 0.4f);
             if (maxWidth > 0f) size = size * Mathf.Min(1f, maxWidth / Mathf.Max(size.x, size.z));
             GameObject hit;
-            if (Models.Place(model, transform, P(at), size.y, Yaw(yaw), out hit, true, Mathf.Max(size.x, size.z) * 1.05f) != null)
+            var wrap = Models.Place(model, transform, P(at), size.y, Yaw(yaw + (onFloor ? Lived(2f) : 0f)), out hit, true, Mathf.Max(size.x, size.z) * 1.05f);
+            if (wrap != null)
             {
                 if (onFloor) furniture.Add(hit);
+                // On a wall: hung by eye, never quite level (turned about the way it faces).
+                else wrap.transform.Rotate(Vector3.forward, Lived(2.5f), Space.Self);
                 return hit;
             }
             return null;
         }
+
+        /// <summary>A small human error: an angle within +-`degrees`, more often small than large.</summary>
+        static float Lived(float degrees) { return (Random.value + Random.value - 1f) * degrees; }
 
         /// <summary>The top of a placed piece of furniture: where clutter sits on it.</summary>
         static float Top(GameObject g, float fallback)
@@ -240,15 +259,33 @@ namespace NightPages
             bool alongZ = Mathf.Abs(normal.x) > 0.5f;
             Vector3 frame = alongZ ? new Vector3(0.05f, h + 0.12f, w + 0.12f) : new Vector3(w + 0.12f, h + 0.12f, 0.05f);
             Vector3 inner = alongZ ? new Vector3(0.05f, h, w) : new Vector3(w, h, 0.05f);
-            Build.Box("Frame", transform, pos, frame, DarkWood, false);
+            var fr = Build.Box("Frame", transform, pos, frame, DarkWood, false);
             var g = Build.Box(live ? "Painting" : "Photograph", transform, pos + normal * 0.015f, inner, m, false);
+            // Hung by eye: a degree or two off level.
+            float tilt = Lived(2.2f);
+            fr.transform.RotateAround(pos, normal, tilt);
+            g.transform.RotateAround(pos, normal, tilt);
+            KeyValuePair<string, Texture2D> pt;
+            if (m != null && paintedOn.TryGetValue(m, out pt)) Painted.Hang(g.GetComponent<Renderer>(), pt.Key, pt.Value);
             if (live) paintings.Add(g.GetComponent<Renderer>());
         }
+
+        readonly Dictionary<Material, KeyValuePair<string, Texture2D>> paintedOn = new Dictionary<Material, KeyValuePair<string, Texture2D>>();
 
         Material PhotoMat(int which)
         {
             var m = Build.Mat(Color.white);
             m.mainTexture = Tex.Photo(which);
+            // Most runs, the painter's pictures instead: old photographs, and here and there a portrait.
+            string kind = which % 3 == 2 ? "portraits" : "photos";
+            if (Painted.Count(kind) > 0 && Catalogue.Roll() < 0.8)
+            {
+                // The ones the fear engine expects to get to you, mostly.
+                var brain = GameDirector.I != null && GameDirector.I.fear != null ? GameDirector.I.fear.brain : null;
+                var tex = Painted.Choose(kind, brain, new System.Random(Catalogue.Next(1 << 30)));
+                m.mainTexture = tex;
+                paintedOn[m] = new KeyValuePair<string, Texture2D>(kind, tex);
+            }
             photoMats.Add(m);
             return m;
         }
@@ -392,6 +429,7 @@ namespace NightPages
             Box("Lamp cord", pos + Vector3.up * 0.2f, new Vector3(0.02f, 0.4f, 0.02f), Dark, false);
             var m = Build.Mat(new Color(0.78f, 0.66f, 0.48f), 0.5f, 0.1f);
             shades.Add(m);
+            shadeAt.Add(P(pos));
             var shade = Build.Prim(PrimitiveType.Cylinder, "Lamp shade", transform, P(pos), new Vector3(0.42f, 0.12f, 0.42f), m, false);
             shade.GetComponent<Renderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;      // the bulb is inside it
         }
@@ -457,6 +495,8 @@ namespace NightPages
             BuildLiving();
             BuildBedroom();
             Plain();
+            PorchKit();
+            Switches();
             BuildCellar();
             Scatter();
             BuildNav();
@@ -520,13 +560,13 @@ namespace NightPages
         {
             Plain();
             var t = transform;
-            Build.Lamp("Hall light south", t, new Vector3(0f, 2.5f, -5f), new Color(1f, 0.86f, 0.66f), 1f, 9f);
+            hall.extra = Build.Lamp("Hall light south", t, new Vector3(0f, 2.5f, -5f), new Color(1f, 0.86f, 0.66f), 1f, 9f);
             Shade(new Vector3(0f, 2.45f, 5f));
             Shade(new Vector3(0f, 2.45f, -5f));
             Rug(new Vector3(0f, 0f, 1.5f), 1.3f, 6f);
 
             var clock = Furn("vintage_grandfather_clock_01", "Clock", new Vector3(1.15f, 1.05f, 0f), new Vector3(0.5f, 2.1f, 0.5f), Wood, Models.Face(-1f, 0f));
-            choreTargets["clock"] = Build.Usable(clock, "Wind the hall clock");
+            HallKit(clock);
             clockTick = Sfx.Loop("clocktick", t, 0.32f, true);
             clockTick.transform.position = clock.transform.position + Vector3.up * 0.6f;
             clockTick.maxDistance = 14f;
@@ -593,12 +633,11 @@ namespace NightPages
             // The typewriter: a body, a platen, a sheet of paper.
             var tw = Box("Typewriter", new Vector3(-6.3f, 0.9f, 4f), new Vector3(0.4f, 0.16f, 0.46f), Dark);
             Build.Prim(PrimitiveType.Cylinder, "Platen", transform, P(-6.44f, 1.02f, 4f), new Vector3(0.07f, 0.24f, 0.07f), Build.Mat(Dark), false).transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
-            Box("Page", new Vector3(-6.47f, 1.14f, 4f), new Vector3(0.01f, 0.22f, 0.2f), Cream, false);
+            typewriterPage = Box("Page", new Vector3(-6.47f, 1.14f, 4f), new Vector3(0.01f, 0.22f, 0.2f), Cream, false);
             typewriter = Build.Usable(tw, "Sit down at the typewriter");
             Loose("dining_chair_02", "Desk chair", new Vector3(-5.35f, 0f, 4f), 0.95f, new Vector3(0.45f, 0.95f, 0.45f), Wood, Models.Face(-1f, 0f), 5f);
             Loose("vintage_oil_lamp", "Oil lamp", new Vector3(-6.45f, 0.81f, 4.75f), 0.42f, new Vector3(0.14f, 0.42f, 0.14f), new Color(0.7f, 0.6f, 0.3f), 0f, 1f);
             Build.Lamp("Desk lamp light", transform, P(-6.3f, 1.4f, 4.6f), new Color(1f, 0.8f, 0.5f), 0.8f, 4f);
-            Loose("book_encyclopedia_set_01", "Grandpa's encyclopedias", new Vector3(-6.4f, 0.81f, 3.25f), 0.24f, new Vector3(0.2f, 0.24f, 0.5f), new Color(0.4f, 0.15f, 0.12f), Models.Face(1f, 0f), 2.5f);
 
             var sh = Furn("wooden_bookshelf_worn", "Bookshelf", new Vector3(-4.5f, 1.05f, 7.62f), new Vector3(1.6f, 2.1f, 0.5f), Wood, Models.Face(0f, -1f));
             shelf = Build.Usable(sh, "Read the manuscript so far");
@@ -641,6 +680,8 @@ namespace NightPages
             Ashtray(new Vector3(-5.95f, 0.81f, 3.1f));
             Thing("cigarette_pack", new Vector3(-6.1f, 0.81f, 3.05f), 70f, 0.05f);
             Thing("binder_notebook", new Vector3(-6.3f, 0.81f, 4.85f), 100f, 0.4f);
+            ClockFace.Make(transform, W(new Vector3(-5.3f, 2.05f, 0.11f)), Wn(Vector3.forward), 0.13f, new Color(0.94f, 0.91f, 0.84f), new Color(0.3f, 0.2f, 0.12f));
+            StudyKit();
         }
 
         void BuildKitchen()
@@ -653,17 +694,9 @@ namespace NightPages
             AddWindow(new Vector3(-3.25f, 1.6f, -7.88f), Vector3.forward, false);
 
             // Cabinets along the outside wall with a worktop, a sink and the kettle.
-            furniture.Add(Box("Cabinets", new Vector3(-7.0f, 0.44f, -4.6f), new Vector3(0.8f, 0.88f, 4.6f), new Color(0.72f, 0.74f, 0.62f)));
-            Box("Worktop", new Vector3(-6.97f, 0.9f, -4.6f), new Vector3(0.88f, 0.05f, 4.66f), new Color(0.42f, 0.36f, 0.3f));
-            Box("Sink", new Vector3(-7.0f, 0.925f, -5.2f), new Vector3(0.5f, 0.02f, 0.7f), new Color(0.6f, 0.62f, 0.64f), false);
             Box("Wall cupboards", new Vector3(-7.2f, 1.9f, -5.4f), new Vector3(0.4f, 0.7f, 3f), new Color(0.72f, 0.74f, 0.62f));
             for (int i = 0; i < 6; i++)
                 Box("Cabinet knob", new Vector3(-6.58f, 0.6f, -6.6f + i * 0.78f), new Vector3(0.03f, 0.03f, 0.03f), new Color(0.7f, 0.6f, 0.3f), false);
-            var pot = Furn("vintage_electric_kettle", "Kettle", new Vector3(-6.95f, 1.075f, -3.4f), new Vector3(0.28f, 0.3f, 0.28f), new Color(0.6f, 0.62f, 0.64f));
-            furniture.Remove(pot);
-            choreTargets["coffee"] = Build.Usable(pot, "Make coffee");
-            Loose(null, "Grandma's mug", new Vector3(-6.9f, 0.93f, -3.9f), 0.1f, new Vector3(0.09f, 0.1f, 0.09f), new Color(0.85f, 0.8f, 0.6f), 0f, 0.3f);
-            Loose(null, "Your mug", new Vector3(-6.9f, 0.93f, -4.1f), 0.1f, new Vector3(0.09f, 0.1f, 0.09f), new Color(0.3f, 0.45f, 0.55f), 0f, 0.3f);
 
             var table = Furn("round_wooden_table_02", "Kitchen table", new Vector3(-4f, 0.375f, -4.4f), new Vector3(1.0f, 0.75f, 1.0f), Wood);
             kitchenChairs.Add(Loose("dining_chair_02", "Kitchen chair", new Vector3(-4f, 0f, -3.55f), 0.95f, new Vector3(0.45f, 0.95f, 0.45f), Wood, Models.Face(0f, -1f), 5f));
@@ -674,25 +707,22 @@ namespace NightPages
             var pantry = Furn("drawer_cabinet", "Pantry cupboard", new Vector3(-4.6f, 0.95f, -7.62f), new Vector3(1.2f, 1.9f, 0.5f), Cream, Models.Face(0f, 1f));
             var heater = Furn("electric_stove", "Heater", new Vector3(-2.1f, 0.4f, -1.2f), new Vector3(0.5f, 0.8f, 0.6f), new Color(0.75f, 0.73f, 0.68f), Models.Face(-1f, 0f));
             var plant = Furn("potted_plant_02", "Ferns", new Vector3(-2.2f, 0.45f, -7.2f), new Vector3(0.7f, 0.9f, 0.7f), new Color(0.2f, 0.36f, 0.16f));
-            choreTargets["plants"] = Build.Usable(plant, "Water the ferns");
-            var fuse = Box("Fuse box", new Vector3(-4.5f, 1.55f, -0.2f), new Vector3(0.45f, 0.6f, 0.14f), new Color(0.5f, 0.52f, 0.5f));
-            choreTargets["fuse"] = Build.Usable(fuse, "Check the fuse box");
+            ferns = WateredPlant(plant, "the ferns");
+            Box("Fuse box", new Vector3(-4.5f, 1.55f, -0.2f), new Vector3(0.45f, 0.6f, 0.14f), new Color(0.5f, 0.52f, 0.5f));
             Picture(new Vector3(-3f, 1.6f, -0.12f), Vector3.back, 0.4f, 0.4f, PhotoMat(4), false);
 
             // The worktop, the table, the floor.
             float worktop = 0.925f;
-            Thing("wooden_bowl_01", new Vector3(-7.0f, worktop, -4.65f), 0f, 0.6f);
-            food.Add(Thing("food_apple_01", new Vector3(-7.02f, worktop + 0.06f, -4.62f), 0f, 0.15f));
-            food.Add(Thing("food_apple_01", new Vector3(-6.95f, worktop + 0.12f, -4.7f), 40f, 0.15f));
-            food.Add(Thing("food_apple_01", new Vector3(-7.07f, worktop + 0.12f, -4.72f), 90f, 0.15f));
-            food.Add(Thing("bananas", new Vector3(-6.95f, worktop, -6.25f), 70f, 0.4f));
-            Thing("lemon", new Vector3(-6.82f, worktop, -6.55f), 0f, 0.1f);
+            Thing("wooden_bowl_01", new Vector3(-7.0f, worktop, -2.62f), 0f, 0.6f);
+            food.Add(Thing("food_apple_01", new Vector3(-7.02f, worktop + 0.06f, -2.59f), 0f, 0.15f));
+            food.Add(Thing("food_apple_01", new Vector3(-6.95f, worktop + 0.12f, -2.67f), 40f, 0.15f));
+            food.Add(Thing("food_apple_01", new Vector3(-7.07f, worktop + 0.12f, -2.69f), 90f, 0.15f));
+            food.Add(Thing("bananas", new Vector3(-6.85f, worktop, -6.58f), 70f, 0.4f));
+            Thing("lemon", new Vector3(-6.75f, worktop, -6.8f), 0f, 0.1f);
             Thing("yellow_onion", new Vector3(-7.12f, worktop, -6.6f), 0f, 0.15f);
             Thing("yellow_onion", new Vector3(-7.0f, worktop, -6.72f), 60f, 0.15f);
-            Thing("wooden_cutting_board", new Vector3(-6.95f, worktop, -5.95f), 90f, 0.8f, 0.45f);
-            Thing("wooden_spoon", new Vector3(-6.9f, worktop + 0.03f, -5.9f), 20f, 0.1f);
-            Thing("jug_01", new Vector3(-6.95f, worktop, -2.75f), 0f, 0.8f);
-            Thing("ceramic_vase_02", new Vector3(-7.15f, worktop, -2.35f), 0f, 0.7f);
+            Thing("wooden_spoon", new Vector3(-6.75f, worktop, -3.95f), 20f, 0.1f);
+            Thing("ceramic_vase_02", new Vector3(-7.2f, worktop, -2.38f), 0f, 0.7f);
             Thing("tea_set_01", new Vector3(-4.0f, Top(table, 0.76f), -4.4f), 15f, 1.5f, 0.8f);
             Thing("pot_enamel_01", new Vector3(-2.1f, Top(heater, 0.8f), -1.25f), 0f, 1f);
             Thing("wicker_basket_01", new Vector3(-6.0f, 0f, -7.35f), 25f, 0.8f);
@@ -707,6 +737,7 @@ namespace NightPages
             Box("Fridge door line", new Vector3(-6.655f, 1.2f, -0.6f), new Vector3(0.01f, 0.01f, 0.66f), new Color(0.35f, 0.35f, 0.33f), false);
             Box("Fridge handle", new Vector3(-6.64f, 1.0f, -0.32f), new Vector3(0.03f, 0.28f, 0.035f), new Color(0.75f, 0.76f, 0.78f), false);
             var hum = Sfx.Loop("fridge", transform, 0.12f, true);
+            fridgeHum = hum;
             hum.transform.position = P(-7.0f, 1.5f, -0.6f);
             hum.maxDistance = 7f;
             Thing("wooden_bowl_02", new Vector3(-7.02f, 1.66f, -0.6f), 0f, 0.4f);
@@ -715,23 +746,27 @@ namespace NightPages
             calendar.mainTexture = CalendarTex(9);
             Build.Box("Calendar", transform, P(-5.6f, 1.45f, -0.115f), new Vector3(0.3f, 0.4f, 0.01f), calendar, false);
             // Canisters at the back of the worktop: flour, sugar, coffee, tea.
-            string[] canisters = { "Flour", "Sugar", "Coffee", "Tea" };
+            string[] canisters = { "Coffee", "Tea", "Sugar", "Flour" };
             for (int i = 0; i < 4; i++)
             {
                 float r = 0.075f - i * 0.008f, h = 0.24f - i * 0.03f;
-                var can = Build.Prim(PrimitiveType.Cylinder, canisters[i] + " canister", transform, P(-7.22f, worktop + h / 2f + 0.003f, -3.75f - i * 0.17f), new Vector3(r * 2f, h / 2f, r * 2f), Build.Mat(new Color(0.88f, 0.86f, 0.8f), 0f, 0.6f), true);
+                // The coffee tin is the brown one nearest the kettle, with a cream label round it.
+                bool coffee = canisters[i] == "Coffee";
+                float jx = Random.Range(-0.025f, 0.02f), jz = Random.Range(-0.02f, 0.02f);
+                var can = Build.Prim(PrimitiveType.Cylinder, canisters[i] + " canister", transform, P(-7.22f + jx, worktop + h / 2f + 0.003f, -3.75f - i * 0.17f + jz), new Vector3(r * 2f, h / 2f, r * 2f), Build.Mat(coffee ? new Color(0.32f, 0.2f, 0.12f) : new Color(0.88f, 0.86f, 0.8f), 0f, 0.6f), true);
+                if (coffee) Build.Prim(PrimitiveType.Cylinder, "Label", can.transform, Vector3.zero, new Vector3(1.02f, 0.35f, 1.02f), Build.Mat(new Color(0.9f, 0.85f, 0.7f), 0f, 0.3f), false);
                 var lid = Build.Prim(PrimitiveType.Cylinder, "Lid", can.transform, Vector3.zero, Vector3.one, Build.Mat(new Color(0.6f, 0.12f, 0.1f), 0f, 0.6f), false);
-                lid.transform.position = P(-7.22f, worktop + h + 0.01f, -3.75f - i * 0.17f);
+                lid.transform.position = P(-7.22f + jx, worktop + h + 0.01f, -3.75f - i * 0.17f + jz);
+                can.transform.Rotate(0f, Random.Range(0f, 360f), 0f);
                 lid.transform.localScale = new Vector3(1.02f, 0.01f / (h / 2f), 1.02f);
                 FlatBottom(can);
                 movables.Add(Movable.Attach(can, 0.5f));
             }
-            // The broom in the corner, the dustpan by it.
-            Fixed("wooden_broom", new Vector3(-7.05f, 0f, -7.62f), 0f);
-            Thing("dustpan", new Vector3(-6.6f, 0f, -7.55f), 15f, 0.3f);
+
             // His last cigarette, at his place at the table.
             float kt2 = Top(table, 0.76f);
             Ashtray(new Vector3(-3.68f, kt2, -4.12f));
+            KitchenKit();
         }
 
         void BuildLiving()
@@ -750,7 +785,7 @@ namespace NightPages
             Box("Mantel", new Vector3(7.1f, 1.23f, -4f), new Vector3(0.7f, 0.07f, 2.2f), DarkWood);
             Box("Chimney breast", new Vector3(7.3f, 2.0f, -4f), new Vector3(0.3f, 1.5f, 1.5f), Tex.Mat(Tex.Wallpaper, 1.5f, 1.5f, 1.2f, AgedPaper));
             chimney = P(7.5f, 0f, -4f);
-            choreTargets["fire"] = Build.Usable(fp, "Feed the fire");
+
             fire = Build.Lamp("Fire", transform, P(6.6f, 0.5f, -4f), new Color(1f, 0.5f, 0.18f), 1f, 6f);
             fireLoop = Sfx.Loop("fire", transform, 0.4f, true);
             fireLoop.transform.position = P(6.9f, 0.4f, -4f);
@@ -799,11 +834,12 @@ namespace NightPages
             // Grandma's china cabinet against the hall wall, a plate on top.
             var china = Fixed("vintage_cabinet_01", new Vector3(1.86f, 0f, -6.0f), Models.Face(1f, 0f), 1.4f);
             Thing("carved_wooden_plate", new Vector3(1.86f, Top(china, 1.55f), -6.0f), 0f, 0.4f);
-            Fixed("potted_plant_01", new Vector3(2.05f, 0f, -7.45f), 0f);
+            ParlourPlantGo = Fixed("potted_plant_01", new Vector3(2.05f, 0f, -7.45f), 0f);
             Doily(new Vector3(5.0f, ct, -4.1f), 0.38f);
             Ashtray(new Vector3(4.72f, ct, -4.05f));
             Magazines(new Vector3(5.15f, 0f, -6.55f), 4);           // a pile on the floor by his chair
             Fixed("hanging_picture_frame_03", new Vector3(1.64f, 1.35f, -1.6f), Models.Face(1f, 0f), 0f, false);
+            LivingKit(fp);
         }
 
         void BuildBedroom()
@@ -827,17 +863,18 @@ namespace NightPages
             quilt.mainTexture = Tex.Quilt;
             var b = Box("Bed", new Vector3(6.3f, 0.47f, 5.6f), new Vector3(1.0f, 0.22f, 1.9f), quilt);
             furniture.Add(b);
-            Box("Pillow", new Vector3(6.3f, 0.63f, 6.35f), new Vector3(0.7f, 0.12f, 0.4f), new Color(0.9f, 0.88f, 0.82f), false);
+            var pillow = Box("Pillow", new Vector3(6.3f, 0.63f, 6.35f), new Vector3(0.7f, 0.12f, 0.4f), new Color(0.9f, 0.88f, 0.82f), false);
             bed = Build.Usable(b, "Go to bed");
             bedTop = b.transform;
+            BedroomKit(b, pillow);
 
             Furn("ClassicNightstand_01", "Nightstand", new Vector3(5.3f, 0.3f, 6.9f), new Vector3(0.5f, 0.6f, 0.45f), Wood, Models.Face(0f, -1f));
             Loose("alarm_clock_01", "Alarm clock", new Vector3(5.3f, 0.61f, 6.9f), 0.14f, new Vector3(0.12f, 0.14f, 0.08f), new Color(0.7f, 0.6f, 0.3f), Models.Face(0f, -1f), 0.4f);
             furniture.Add(Box("Bedside table", new Vector3(3.2f, 0.3f, 7.1f), new Vector3(0.5f, 0.6f, 0.5f), Wood));
             wardrobe = Furn("painted_wooden_cabinet_02", "Wardrobe", new Vector3(2.15f, 1.05f, 1.2f), new Vector3(0.7f, 2.1f, 1.1f), Cream, Models.Face(1f, 0f)).transform;
-            var dresserGo = Furn("vintage_wooden_drawer_01", "Dresser", new Vector3(4.6f, 0.45f, 0.62f), new Vector3(1.4f, 0.9f, 0.55f), Wood, Models.Face(0f, 1f));
+            var dresserGo = Furn("vintage_wooden_drawer_01", "Dresser", new Vector3(3.55f, 0.45f, 0.62f), new Vector3(1.4f, 0.9f, 0.55f), Wood, Models.Face(0f, 1f));
             // The mirror over the dresser shows what Moodscape paints, like the paintings do.
-            Picture(new Vector3(4.6f, 1.6f, 0.12f), Vector3.forward, 0.7f, 0.9f, paintMat, true);
+            Picture(new Vector3(3.55f, 1.6f, 0.12f), Vector3.forward, 0.7f, 0.9f, paintMat, true);
             Picture(new Vector3(7.38f, 1.6f, 5.9f), Vector3.left, 0.4f, 0.5f, PhotoMat(7), false);
 
             // The boxes you haven't unpacked, his spectacles, a chair.
@@ -846,7 +883,7 @@ namespace NightPages
             Thing("vintage_suitcase", new Vector3(6.3f, 0f, 4.15f), 90f, 6f, 0.9f);
             Thing("round_spectacles", new Vector3(5.2f, 0.62f, 6.85f), 0f, 0.05f);
             Thing("office_notepads", new Vector3(3.2f, 0.62f, 7.05f), 15f, 0.2f);
-            Fixed("painted_wooden_chair_01", new Vector3(5.9f, 0f, 1.0f), Models.Face(-0.6f, 1f));
+            Fixed("painted_wooden_chair_01", new Vector3(4.55f, 0f, 1.25f), Models.Face(-0.6f, 1f));
             Fixed("hanging_picture_frame_02", new Vector3(1.64f, 1.4f, 6.4f), Models.Face(1f, 0f), 0f, false);
 
             // The picture over the bed, her slippers beside it, his crutches in the corner, her wheelchair by the window.
@@ -855,9 +892,10 @@ namespace NightPages
             Fixed("vintage_crutches_01", new Vector3(7.12f, 0f, 7.55f), Models.Face(-1f, -1f));
             wheelchair = Loose("wheelchair_01", "Grandma's wheelchair", new Vector3(2.5f, 0f, 5.4f), 1.1f, new Vector3(0.82f, 1.1f, 1.09f), new Color(0.25f, 0.25f, 0.27f), Models.Face(1f, 0f), 15f);
             float dt = Top(dresserGo, 0.9f);
-            Thing("rubber_duck_toy", new Vector3(4.15f, dt, 0.62f), Models.Face(0f, 1f), 0.2f);
-            Thing("potted_plant_04", new Vector3(5.05f, dt, 0.62f), 0f, 0.4f);
-            Doily(new Vector3(4.6f, dt, 0.62f), 0.4f);
+            Thing("rubber_duck_toy", new Vector3(3.1f, dt, 0.62f), Models.Face(0f, 1f), 0.2f);
+            Thing("potted_plant_04", new Vector3(4.0f, dt, 0.62f), 0f, 0.4f);
+            Doily(new Vector3(3.55f, dt, 0.62f), 0.4f);
+            BuildBathroom();
         }
 
         // The cellar is its own space under the house. You reach it through the cellar door once it opens.
@@ -1121,6 +1159,18 @@ namespace NightPages
                 navLinks.Add(new[] { rn[0].z > 0f ? 1 : 3, door });
                 navLinks.Add(new[] { door, door + 1 });
             }
+            // The bathroom opens off the bedroom: outside its door (in the bedroom) to the bedroom's middle, then in.
+            if (bath != null)
+            {
+                int mid = -1;
+                for (int i = 5; i < nav.Count; i++) { var r = RoomAt(nav[i]); if (r != null && r.name == "bedroom" && (i - 5) % 2 == 1) mid = i; }
+                int o = nav.Count;
+                nav.Add(bathNavOutside);
+                nav.Add(bathNavInside);
+                if (mid >= 0) navLinks.Add(new[] { mid, o });
+                navLinks.Add(new[] { o, o + 1 });
+                roomNav.Add(new[] { bathNavOutside, bathNavInside });
+            }
         }
 
         /// <summary>The middle of a room, as its waypoint has it (a clear spot to cross the room from).</summary>
@@ -1187,33 +1237,100 @@ namespace NightPages
 
         // ---------------------------------------------------------------- time of day
 
-        /// <summary>time: 0 = day, 1 = evening. Each day of the run is a little dimmer than the last.</summary>
+        /// <summary>Legacy (tests, coming up from the cellar): 0 = mid-morning, 1 = evening with every lamp on.</summary>
         public void SetTime(int newTime, int newDay)
         {
-            time = newTime;
+            SetHour(newTime == 0 ? 10.5f : 20.5f, newDay);
+            if (newTime == 1) foreach (var r in rooms) r.lit = true;
+        }
+
+        /// <summary>How much daylight there is (0 at night, 1 at midday on day 1).</summary>
+        public float Sun { get; private set; }
+        float lampLevel = 0.95f;
+        int outdoorTime = -1;
+
+        /// <summary>The light for an hour of the day (7.5 = half past seven). Each day of the run is a little dimmer.</summary>
+        public void SetHour(float hour, int newDay)
+        {
             day = newDay;
-            // By day the lamps are off (light comes through the windows); in the evening they're the only light there is.
-            bright = time == 0 ? 0.12f : 0.95f - 0.05f * (day - 1);
-            float sun = time == 0 ? 1f - 0.07f * (day - 1) : 0f;
+            float h = hour % 24f;
+            float sun = Mathf.Clamp01(Mathf.InverseLerp(5.9f, 8.0f, h)) * Mathf.Clamp01(Mathf.InverseLerp(19.2f, 16.2f, h));
+            sun = sun * sun * (3f - 2f * sun) * (1f - 0.07f * (day - 1));
+            Sun = sun;
+            // Low sun is golden: the first hour or two of the morning and the late afternoon.
+            float gold = sun > 0.01f ? (h < 12f ? Mathf.Clamp01(Mathf.InverseLerp(10f, 7.2f, h)) : Mathf.Clamp01(Mathf.InverseLerp(15.2f, 18.6f, h))) : 0f;
+            time = sun > 0.3f ? 0 : 1;
+            lampLevel = 0.95f - 0.05f * (day - 1);
+            bright = lampLevel;
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
-            RenderSettings.ambientLight = time == 0
-                ? new Color(0.115f, 0.112f, 0.11f) * (1f - 0.06f * (day - 1))
-                : new Color(0.018f, 0.018f, 0.026f);
+            Color dayAmb = new Color(0.115f, 0.112f, 0.11f) * (1f - 0.06f * (day - 1)), nightAmb = new Color(0.018f, 0.018f, 0.026f);
+            RenderSettings.ambientLight = Color.Lerp(nightAmb, Color.Lerp(dayAmb, dayAmb * new Color(1.15f, 0.95f, 0.78f), gold * 0.6f), Mathf.Clamp01(sun * 1.4f));
             RenderSettings.fog = true;
             RenderSettings.fogMode = FogMode.Exponential;
-            RenderSettings.fogColor = time == 0 ? new Color(0.07f, 0.068f, 0.065f) : new Color(0.008f, 0.008f, 0.012f);
-            RenderSettings.fogDensity = (0.018f + 0.006f * (day - 1)) * (time == 0 ? 1f : 1.5f);
+            RenderSettings.fogColor = Color.Lerp(new Color(0.008f, 0.008f, 0.012f), new Color(0.07f, 0.068f, 0.065f), Mathf.Clamp01(sun * 1.4f));
+            RenderSettings.fogDensity = (0.018f + 0.006f * (day - 1)) * Mathf.Lerp(1.5f, 1f, Mathf.Clamp01(sun * 1.4f));
             if (Player.I != null) Player.I.cam.backgroundColor = RenderSettings.fogColor;
-            if (Outdoors.I != null) Outdoors.I.SetTime(time, day);
-            foreach (var m in shades) m.SetColor("_EmissionColor", m.color * (time == 0 ? 0.05f : 0.55f));
+            if (Outdoors.I != null && (time != outdoorTime || newDay != day)) { outdoorTime = time; Outdoors.I.SetTime(time, day); }
+            Color golden = new Color(1f, 0.78f, 0.5f);
             foreach (var w in windows)
             {
-                Color c = time == 0 ? Color.Lerp(new Color(0.42f, 0.45f, 0.5f), new Color(0.75f, 0.8f, 0.86f), sun) : new Color(0.03f, 0.04f, 0.08f);
+                Color dayC = Color.Lerp(new Color(0.75f, 0.8f, 0.86f), new Color(0.95f, 0.75f, 0.52f), gold);
+                Color c = Color.Lerp(new Color(0.03f, 0.04f, 0.08f), Color.Lerp(new Color(0.42f, 0.45f, 0.5f), dayC, sun), Mathf.Clamp01(sun * 3f));
                 w.pane.color = c;
-                w.pane.SetColor("_EmissionColor", c * (time == 0 ? 1.1f * sun + 0.15f : 0.25f));
-                w.glow.intensity = time == 0 ? 2.4f * sun : 0.15f;
-                w.glow.color = time == 0 ? new Color(0.86f, 0.9f, 1f) : new Color(0.35f, 0.45f, 0.85f);
+                w.pane.SetColor("_EmissionColor", c * (sun > 0.02f ? 1.1f * sun + 0.15f : 0.25f));
+                w.glow.intensity = Mathf.Max(0.15f, 2.4f * sun);
+                w.glow.color = Color.Lerp(new Color(0.35f, 0.45f, 0.85f), Color.Lerp(new Color(0.86f, 0.9f, 1f), golden, gold), Mathf.Clamp01(sun * 3f));
             }
+        }
+
+        /// <summary>Make a light switch on a wall (`normal` points out of the wall into the room).</summary>
+        Interactable LightSwitch(Room r, Vector3 at, Vector3 normal)
+        {
+            bool onX = Mathf.Abs(normal.x) > 0.5f;            // the wall runs along z
+            var plate = Build.Box("Light switch", transform, at, onX ? new Vector3(0.012f, 0.12f, 0.08f) : new Vector3(0.08f, 0.12f, 0.012f), Cream, false);
+            var col = plate.AddComponent<BoxCollider>();
+            col.size = onX ? new Vector3(4f, 1.6f, 1.8f) : new Vector3(1.8f, 1.6f, 4f);        // easy to hit with a glance
+            var toggle = Build.Box("Switch", transform, at + normal * 0.01f, onX ? new Vector3(0.012f, 0.032f, 0.02f) : new Vector3(0.02f, 0.032f, 0.012f), Dark, false);
+            System.Action show = () => toggle.transform.localPosition = at + normal * 0.01f + Vector3.up * (r.lit ? -0.012f : 0.012f);
+            show();
+            var it = Build.Usable(plate, "");
+            it.promptFn = () => r.lit ? "Switch the light off" : "Switch the light on";
+            it.use = () =>
+            {
+                r.lit = !r.lit;
+                Sfx.At("click", plate.transform.position, 0.55f, r.lit ? 1.1f : 0.9f);
+                show();
+                if (Switched != null) Switched(r, r.lit);
+            };
+            switchShows.Add(show);
+            r.lightSwitch = it;
+            return it;
+        }
+
+        readonly List<System.Action> switchShows = new List<System.Action>();
+
+        /// <summary>Put every switch's toggle where its lamp says (after something other than a hand changed them).</summary>
+        public void ShowSwitches() { foreach (var s in switchShows) s(); }
+
+        /// <summary>Every flick of a light switch (the learner keeps count).</summary>
+        public static System.Action<Room, bool> Switched;
+
+        /// <summary>Switches beside every door (rooms and both ends of the hall). Called once the rooms exist.</summary>
+        void Switches()
+        {
+            Plain();
+            foreach (var r in rooms)
+            {
+                if (r == hall || r.door == null || r.name == "bathroom") continue;
+                // The doorway is in the hall wall at the room's own z; the switch goes just inside, past the latch side.
+                Vector3 hinge = r.door.transform.localPosition;
+                float inside = Mathf.Sign(r.center.x - hinge.x);
+                float latch = Mathf.Sign(r.center.z - hinge.z);
+                Vector3 at = new Vector3(hinge.x + inside * (T / 2f + 0.007f), 1.2f, r.center.z + latch * (Gap / 2f + 0.24f));
+                LightSwitch(r, at, new Vector3(inside, 0f, 0f));
+            }
+            LightSwitch(hall, new Vector3(0.78f, 1.2f, 8f - T / 2f - 0.007f), Vector3.back);
+            LightSwitch(hall, new Vector3(-0.68f, 1.2f, -8f + T / 2f + 0.007f), Vector3.forward);
         }
 
         void Update()
@@ -1221,11 +1338,21 @@ namespace NightPages
             float now = Time.time;
             foreach (var r in rooms)
             {
-                float b = time == 0 && r == hall ? 0.45f : bright;
+                // Daylight from the windows (a little bounced fill), and the lamp if it's switched on.
+                float fill = Sun * (r == hall ? 0.45f : 0.16f);
+                float b = Mathf.Max(fill, r.lit ? lampLevel : 0f);
                 float target = now < r.darkUntil ? 0f : r.baseIntensity * b;
-                r.light.intensity = Mathf.MoveTowards(r.light.intensity, target, Time.deltaTime * 2f);
+                r.light.intensity = Mathf.MoveTowards(r.light.intensity, target, Time.deltaTime * 4f);
+                if (r.extra != null) r.extra.intensity = Mathf.MoveTowards(r.extra.intensity, now < r.darkUntil ? 0f : b, Time.deltaTime * 4f);
+            }
+            for (int i = 0; i < shades.Count && i < shadeAt.Count; i++)
+            {
+                var r = RoomAt(shadeAt[i]);
+                bool on = r != null && r.lit && now >= r.darkUntil;
+                shades[i].SetColor("_EmissionColor", shades[i].color * (on ? 0.55f : 0.05f));
             }
             if (fire != null) fire.intensity = (0.75f + 0.3f * Mathf.PerlinNoise(now * 3f, 0.5f)) * Mathf.Max(0.4f, bright);
+            KitTick();
             // An old house settles: a creak in the boards or the walls every so often, more of them at night.
             if (now > nextSettle)
             {
@@ -1233,7 +1360,7 @@ namespace NightPages
                 var r = rooms[Random.Range(0, rooms.Count)];
                 Sfx.At("settle", r.center + new Vector3(Random.Range(-2f, 2f), Random.Range(0.2f, 2.6f), Random.Range(-2f, 2f)), time == 0 ? 0.35f : 0.55f, 0.85f + Random.value * 0.3f);
             }
-            if (fireLoop != null) fireLoop.volume = time == 0 ? 0.25f : 0.45f;
+            if (fireLoop != null) fireLoop.volume = fireLit ? (time == 0 ? 0.25f : 0.45f) : 0f;
             if (cellarBulb != null) cellarBulb.intensity = Mathf.PerlinNoise(now * 7f, 3f) > 0.2f ? 2.2f : 0.6f;
             // Once everything dropped into place has come to rest, that is where it "belongs".
             if (settleAt > 0f && now > settleAt)

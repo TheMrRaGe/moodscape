@@ -6,7 +6,7 @@ using UnityEngine.InputSystem.Controls;
 
 namespace NightPages
 {
-    public enum Btn { Interact, One, Two, Three, Pause, Mind, Scared, Amused, SkipAhead, Restart, Sprint, Voice, Face }
+    public enum Btn { Interact, One, Two, Three, Pause, Mind, Scared, Amused, SkipAhead, Restart, Sprint, Voice, Face, Flashlight, Work, Watch, Mark }
 
     /// <summary>
     /// All input goes through here, so the game runs whether the project uses Unity's old Input Manager,
@@ -42,12 +42,23 @@ namespace NightPages
                 case Btn.Sprint: return k.leftShiftKey;
                 case Btn.Voice: return k.vKey;
                 case Btn.Face: return k.cKey;
+                case Btn.Flashlight: return k.qKey;
+                case Btn.Watch: return k.tabKey;
+                case Btn.Mark: return k.f8Key;
             }
             return null;
         }
 
-        public static bool Down(Btn b) { var k = K(b); return (k != null && k.wasPressedThisFrame) || VRRig.Down(b); }
-        public static bool Held(Btn b) { var k = K(b); return (k != null && k.isPressed) || VRRig.Held(b); }
+        public static bool Down(Btn b)
+        {
+            if (b == Btn.Work) { var m = Mouse.current; return m != null && m.leftButton.wasPressedThisFrame; }
+            var k = K(b); return (k != null && k.wasPressedThisFrame) || VRRig.Down(b);
+        }
+        public static bool Held(Btn b)
+        {
+            if (b == Btn.Work) { var m = Mouse.current; return m != null && m.leftButton.isPressed; }
+            var k = K(b); return (k != null && k.isPressed) || VRRig.Held(b);
+        }
 
         public static Vector2 Move
         {
@@ -83,6 +94,10 @@ namespace NightPages
                 case Btn.Sprint: return KeyCode.LeftShift;
                 case Btn.Voice: return KeyCode.V;
                 case Btn.Face: return KeyCode.C;
+                case Btn.Flashlight: return KeyCode.Q;
+                case Btn.Work: return KeyCode.Mouse0;
+                case Btn.Watch: return KeyCode.Tab;
+                case Btn.Mark: return KeyCode.F8;
             }
             return KeyCode.None;
         }

@@ -24,6 +24,8 @@ namespace NightPages
         public static Vector2 MoveStick;
         public static int Selected;             // highlighted line at the typewriter
         public static int ChoicePressed = -1;   // set for one frame when the trigger confirms it
+        /// <summary>The grip buttons: held, and pressed this frame (grip picks things up with that hand).</summary>
+        public static bool GripL, GripR, GripDownL, GripDownR;
 
         public Transform rightHand, leftHand;
         public Vector3 headLocalPos = new Vector3(0f, 1.65f, 0f);
@@ -45,6 +47,7 @@ namespace NightPages
         {
             I = null; Active = false; HeadSpeed = HeadAngularSpeed = HandJitter = 0f;
             HandsNearFace = false; MoveStick = Vector2.zero; Selected = 0; ChoicePressed = -1;
+            GripL = GripR = GripDownL = GripDownR = false;
         }
 
         public static VRRig Attach(Player p)
@@ -150,7 +153,7 @@ namespace NightPages
             }
             ChoicePressed = -1;
             turnStep = 0f;
-            if (!Active) { MoveStick = Vector2.zero; return; }
+            if (!Active) { MoveStick = Vector2.zero; GripL = GripR = GripDownL = GripDownR = false; return; }
 
             if (!originSet && t > checkAt)
             {
@@ -177,7 +180,11 @@ namespace NightPages
             now[Btn.Restart] = now[Btn.Interact];
             now[Btn.Pause] = Button(left, CommonUsages.menuButton);
             now[Btn.Mind] = Button(left, CommonUsages.secondaryButton);
-            now[Btn.Sprint] = Button(left, CommonUsages.primary2DAxisClick) || Button(left, CommonUsages.gripButton);
+            now[Btn.Sprint] = Button(left, CommonUsages.primary2DAxisClick);
+            // Grip picks things up (see Hands), so it no longer hurries you along.
+            bool gl = Button(left, CommonUsages.gripButton), gr = Button(right, CommonUsages.gripButton);
+            GripDownL = gl && !GripL; GripDownR = gr && !GripR;
+            GripL = gl; GripR = gr;
 
             MoveStick = Stick(left);
             Vector2 rs = Stick(right);

@@ -158,7 +158,7 @@ namespace NightPages
             if (modal == Modal.None)
             {
                 Fill(new Rect(W / 2f - 2f, H / 2f - 2f, 4f, 4f), new Color(1f, 1f, 1f, 0.5f));
-                if (!string.IsNullOrEmpty(prompt)) Shadowed(new Rect(0f, H * 0.58f, W, 50f), prompt, sText, paper);
+                if (!string.IsNullOrEmpty(prompt)) Shadowed(new Rect(0f, H * 0.58f, W, 100f), prompt, sText, paper);
                 float y = 36f;
                 foreach (var o in objectives)
                 {

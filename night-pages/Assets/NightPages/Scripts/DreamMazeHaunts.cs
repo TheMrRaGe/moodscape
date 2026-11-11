@@ -370,7 +370,7 @@ namespace NightPages
         }
 
         // Every doorway of the room slams shut, the light goes, and something breathes. Then one opens.
-        IEnumerator Sealed(Cell c)
+        internal IEnumerator Sealed(Cell c)
         {
             c.held = true;
             float until = Time.time + 7.5f;

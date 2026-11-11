@@ -95,7 +95,7 @@ namespace NightPages
 
         // ---------------------------------------------------------------- the telephone
 
-        bool Phone() { StartCoroutine(Ring()); return true; }
+        bool Phone() { if (g.job != null && g.job.PhoneBusy) return false; StartCoroutine(Ring()); return true; }
 
         IEnumerator Ring()
         {
@@ -113,6 +113,7 @@ namespace NightPages
 
         void Answer()
         {
+            if (g.job != null && g.job.OnPhone()) return;
             if (!ringing)
             {
                 g.hud.Say(g.day >= 4 ? "The line is dead. Then, very faintly, someone breathing." : "The line is dead.", 3.5f);

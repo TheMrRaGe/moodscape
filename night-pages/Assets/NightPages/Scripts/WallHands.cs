@@ -37,14 +37,16 @@ namespace NightPages
             if (col.GetComponentInParent<Movable>() != null || col.GetComponentInParent<Interactable>() != null || col.GetComponentInParent<Door>() != null) return;
             Bounds b = col.bounds;
             if (b.size.y < 2f || Mathf.Max(b.size.x, b.size.z) < 1.4f) return;            // a wall, not a cupboard
+            Habits.Use(g, "hugs walls", Time.deltaTime / 6f);
+            int hug = Habits.Level(g, "hugs walls");
             // Only after you've been standing at it a moment.
             if (lastNear <= 0f) { lastNear = Time.time; return; }
             if (Time.time - lastNear < 0.7f) return;
             lastNear = 0f;
-            nextAllowed = Time.time + (dream ? Random.Range(25f, 60f) : Random.Range(70f, 160f));
+            nextAllowed = Time.time + (dream ? Random.Range(25f, 60f) : Random.Range(70f, 160f)) / (1f + hug);      // you keep going to the walls: they keep reaching
             var brain = g.fear != null ? g.fear.brain : null;
             float want = brain != null ? brain.Draw("wallhand", "hand", Tags) : Random.value;
-            if (want < (dream ? 0.2f : 0.35f)) { g.Log("wall hand: you were close to a wall; not this time (" + want.ToString("0.00") + ")"); return; }
+            if (want < (dream ? 0.2f : 0.35f) - 0.08f * hug) { g.Log("wall hand: you were close to a wall; not this time (" + want.ToString("0.00") + ")"); return; }
             g.StartCoroutine(Reach(g, hit.point, hit.normal, cam));
         }
 
