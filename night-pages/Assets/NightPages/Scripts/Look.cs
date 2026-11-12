@@ -135,7 +135,7 @@ namespace NightPages
         public void Cut() { if (layer != null) layer.ResetHistory(); }
 
         /// <summary>A scare lands: 0..1.</summary>
-        public static void Kick(float strength) { if (I != null) I.kick = Mathf.Max(I.kick, Mathf.Clamp01(strength)); }
+        public static void Kick(float strength) { if (I != null) I.kick = Mathf.Max(I.kick, Mathf.Clamp01(strength * Settings.S.shake)); }
 
         /// <summary>How afraid the player is right now, 0..1 (from the fear engine and the body readings).</summary>
         public static void Fear(float f) { if (I != null) I.fear = Mathf.Clamp01(f); }

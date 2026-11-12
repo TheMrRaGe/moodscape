@@ -155,6 +155,8 @@ namespace NightPages
             else if (hud.modal == Modal.Title || hud.modal == Modal.Ending)
                 sb.Append("<size=120><b>").Append(hud.header).Append("</b></size>\n\n").Append(Wrap(hud.VRBody, 60)).Append("\n\n")
                   .Append(hud.modal == Modal.Title ? "[trigger]  Begin" : "[trigger]  Begin again. The dreams will remember you.");
+            else if (hud.modal == Modal.Menu)
+                sb.Append("<size=100><b>").Append(hud.header).Append("</b></size>\n\n").Append(Wrap(hud.body, 60)).Append("\n\n<i>").Append(hud.footer).Append("</i>");
             else if (hud.modal == Modal.Paused) sb.Append("<size=120><b>Paused</b></size>\n\n[menu button] to return");
             pageText.text = sb.ToString();
 

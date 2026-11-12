@@ -14,7 +14,7 @@ namespace NightPages
     public partial class House
     {
         Transform wear;
-        int wearSeed;
+        public int wearSeed;
 
         static readonly Dictionary<Color, Material> wearMats = new Dictionary<Color, Material>();
         static Material WM(Color c, float smooth = 0.1f)

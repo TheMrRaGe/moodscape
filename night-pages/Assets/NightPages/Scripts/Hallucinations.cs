@@ -59,7 +59,7 @@ namespace NightPages
                     minEpisode = 2,
                     cooldown = 60f,
                     tags = tags.ToArray(),
-                    can = () => !busy && !FearEngine.Banned.Contains(opts[opt].label) && opts[opt].intensity <= (g.day <= 4 ? 1 : 2) && Possible(opt),
+                    can = () => !busy && !FearEngine.Banned.Contains(opts[opt].label) && opts[opt].intensity <= Mathf.Min(g.day <= 4 ? 1 : 2, Settings.ScareCap) && Possible(opt),
                     fire = () => Show(opt),
                 });
             }
@@ -228,7 +228,7 @@ namespace NightPages
                 glow = Build.Lamp("Glimpse light", transform, lit, new Color(0.6f, 0.7f, 0.9f), 1.4f, 3f);
                 glow.transform.position = lit;
             }
-            var look = g.fear.Compose(g.day <= 4 ? 1 : 2);
+            var look = g.fear.Compose(Mathf.Min(g.day <= 4 ? 1 : 2, Settings.ScareCap));
             look[Monster.Shift] = 0;
             if (lookAngle <= 0f) look[Monster.Legs] = Monster.TwoLegs;      // a figure in a doorway reads only if it stands
             shown = Monster.Create(null, look);

@@ -14,16 +14,58 @@ namespace NightPages
     public partial class GameDirector : MonoBehaviour
     {
         public static GameDirector I;
+        /// <summary>
+        /// The story's own calendar: everything that escalates (hauntings, the dream, chores, the house's wear, the
+        /// job's passages) is tuned to seven story days. A run can be longer or shorter than that (RunDays): each
+        /// real day maps onto a story day, so a 3-day run tells days 1, 4 and 7, and a 30-day run lingers.
+        /// </summary>
         public const int Days = 7;
+        /// <summary>How many days this run lasts (chosen on the title screen: 3, 7, 14 or 30).</summary>
+        public static int RunDays = 7;
+        public static readonly int[] RunLengths = { 3, 7, 14, 30 };
 
         public Phase phase = Phase.Title;
+        /// <summary>The story day (1 to 7) that everything is tuned to. See calendar for the real day.</summary>
         public int day;
+        /// <summary>The real day of the run, 1 to RunDays.</summary>
+        public int calendar;
+
+        /// <summary>Which story day (1 to 7) a real day of the run is.</summary>
+        public static int StoryDay(int cal)
+        {
+            if (RunDays <= 1) return Days;
+            if (cal >= RunDays) return Days;
+            float k = (cal - 1) * (Days - 1) / (float)(RunDays - 1);
+            return Mathf.Clamp(1 + Mathf.RoundToInt(k), 1, Days);
+        }
+
+        /// <summary>Of the real days that share this one's story day, which this is (0-based) and how many share it.</summary>
+        public static void Share(int cal, out int index, out int count)
+        {
+            int sd = StoryDay(cal);
+            index = 0; count = 0;
+            for (int c = 1; c <= RunDays; c++)
+            {
+                if (StoryDay(c) != sd) continue;
+                if (c < cal) index++;
+                count++;
+            }
+            if (count == 0) count = 1;
+        }
+
+        public bool LastDay { get { return calendar >= RunDays; } }
         public float grip = 0.8f;
         public Truth truth;
         /// <summary>This run's ghost story (who, what happened, why they stay, how they show it): see Tale.</summary>
         public Tale tale;
-        /// <summary>Hardcore: not getting out of a dream sends you back to day one. (Otherwise you dream it again, in a new maze.)</summary>
-        public bool hardcore;
+        /// <summary>Long stays: the older stories under this one (one for a fortnight, two for a month), oldest last.</summary>
+        public readonly List<Tale> older = new List<Tale>();
+        /// <summary>Clues needed before the deeper endings open: by difficulty (2, 3, 3, 4), one fewer in a short stay (never under 2).</summary>
+        public static int CluesNeeded { get { int n = new[] { 2, 3, 3, 4 }[Level]; return Mathf.Max(2, RunDays <= 3 ? n - 1 : n); } }
+        /// <summary>The "ghosts only" option: limit what can really be going on to the supernatural.</summary>
+        public static bool GhostsOnly { get { return Settings.S.ghostsOnly; } }
+        /// <summary>Hardcore: not getting out of a dream sends you back to day one. (See Difficulty.cs for the four levels.)</summary>
+        public bool hardcore { get { return Level == 3; } }
         /// <summary>How many times this run you didn't get out of a dream.</summary>
         public int dreamDeaths;
         public int tagFace, tagAway, tagBlame, clues, rewriteSeed;
@@ -89,6 +131,8 @@ namespace NightPages
 
         void Start()
         {
+            Settings.Load();
+            Settings.Apply();
             Sfx.Init();
             hud = gameObject.AddComponent<Hud>();
             link = gameObject.AddComponent<MoodscapeLink>();
@@ -99,6 +143,7 @@ namespace NightPages
             try { if (System.IO.File.Exists(TellerPath)) brain.Load(System.IO.File.ReadAllText(TellerPath)); }
             catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't read the storyteller's memory (" + e.Message + "); starting fresh"); }
             teller = new FearCore.Storyteller(brain) { Log = s => Log(s) };
+            ApplyDifficulty();
             // What it learned about your habits in earlier runs (weaker now, but it remembers).
             try { if (System.IO.File.Exists(HabitsPath)) { teller.tactics.Load(System.IO.File.ReadAllText(HabitsPath)); Log("habits: remembered from before: " + Habits.Describe(this)); } }
             catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't read habits: " + e.Message); }
@@ -157,10 +202,7 @@ namespace NightPages
             nights.Init(this);
 
             WireHouse();
-            // Forms the player has asked never to see, e.g. PlayerPrefs "np_banned" = "A spider,A clown".
-            FearEngine.Banned.Clear();
-            foreach (var label in PlayerPrefs.GetString("np_banned", "").Split(','))
-                if (label.Trim().Length > 0) FearEngine.Banned.Add(label.Trim());
+            // Forms the player has asked never to see come from the settings file (Settings.Apply, above).
 
             drone = Sfx.Loop("drone", transform, 0f, false);
             heart = Sfx.Loop("heart", transform, 0f, false);
@@ -224,7 +266,8 @@ namespace NightPages
             hud.vrBody = "A prototype.\n\nLeft stick to walk, right stick to turn. Point your right hand and pull the trigger to use things.\nGrip to pick things up with either hand. Your watch is on your left wrist.\n" +
                          "The dreams learn what unsettles you, and they remember.\n\n" +
                          "<size=50>Left Y: see what the game is thinking.  Keyboard V: let it listen for gasps.</size>";
-            hardcore = PlayerPrefs.GetInt("np_hardcore", 0) == 1;
+            RunDays = PlayerPrefs.GetInt("np_days", 7);
+            if (System.Array.IndexOf(RunLengths, RunDays) < 0) RunDays = 7;
             titleBody = hud.body;
             ShowHardcore();
             hud.Open(Modal.Title);
@@ -234,6 +277,21 @@ namespace NightPages
 
         /// <summary>The job the title screen is set to ("random" or one of Job.Ids).</summary>
         static string JobPref { get { return PlayerPrefs.GetString("np_job", "random"); } }
+
+        public static string LengthName(int days)
+        {
+            return days == 3 ? "a weekend (3 days)" : days == 7 ? "a week (7 days)" : days == 14 ? "a fortnight (14 days)" : days == 30 ? "a month (30 days)" : days + " days";
+        }
+
+        void CycleLength()
+        {
+            int i = System.Array.IndexOf(RunLengths, RunDays);
+            RunDays = RunLengths[(i + 1) % RunLengths.Length];
+            PlayerPrefs.SetInt("np_days", RunDays);
+            PlayerPrefs.Save();
+            ShowHardcore();
+            Sfx.Ui("pageturn", 0.5f);
+        }
 
         void CycleJob()
         {
@@ -249,8 +307,9 @@ namespace NightPages
         void ShowHardcore()
         {
             hud.body = titleBody + "\n\n<size=22>Each night's dream is a maze that changes. Get out before the night runs out.\n" +
-                       (hardcore ? "HARDCORE: if you don't get out, you start again from day one." : "If you don't get out, you dream it again, in a different maze.") + "</size>";
-            hud.footer = "[E]  Begin        [1]  Hardcore: " + (hardcore ? "ON" : "off") + "        [2]  You work as: " + (JobPref == "random" ? "(any)" : Job.NameOf(JobPref));
+                       DifficultyLine + "</size>";
+            hud.footer = "[E]  Begin        [1]  " + DifficultyNames[Level] + "        [2]  You work as: " + (JobPref == "random" ? "(any)" : Job.NameOf(JobPref)) +
+                         "        [3]  Stay: " + LengthName(RunDays);
         }
 
         /// <summary>A page found in the dream: this run's story, and (the first time) how far the way out is.</summary>
@@ -285,13 +344,24 @@ namespace NightPages
             hud.ClearSubtitles();
             if (hardcore)
             {
-                Log("dream: died in the dream on day " + day + " in hardcore (" + how + "): back to day one");
+                Log("dream: died in the dream on day " + day + " in hardcore (" + how + "): back to day one, and the diary burns");
+                Diary.Burn();
                 hud.Say("You didn't wake up.", 4f);
                 yield return new WaitForSeconds(4f);
                 busy = false;
                 NewRun();
                 yield break;
             }
+            if (Level == 0)
+            {
+                Log("dream: didn't get out on day " + day + " (" + how + "), on easy: you wake, and that night is gone");
+                hud.Say("You wake with a start. Whatever it was, it's over.", 4f);
+                yield return new WaitForSeconds(2f);
+                busy = false;
+                yield return Wake(false);
+                yield break;
+            }
+            dreamRetry = true;
             Log("dream: died in the dream on day " + day + " (" + how + "): dreaming it again in a new maze (" + dreamDeaths + " so far this run)");
             hud.Say(how == "it reached you" ? "It had you. Then you were asleep again, somewhere else." : "You didn't get out. You're asleep again, and it isn't the same place.", 4.5f);
             yield return new WaitForSeconds(1.6f);
@@ -322,7 +392,7 @@ namespace NightPages
             house.cellarStairs.use = () => { if (!busy) StartCoroutine(Stairs(false)); };
             house.cellarFloor.use = LookAtCellarFloor;
             house.leave.use = () => StartCoroutine(EndRun("leave"));
-            house.leave.can = () => day >= Days && phase != Phase.Dream && phase != Phase.Ending;
+            house.leave.can = () => LastDay && phase != Phase.Dream && phase != Phase.Ending;
         }
 
         int runsStarted;
@@ -370,11 +440,23 @@ namespace NightPages
             job = Job.Make(pick);
             job.Init(this);
             WireHouse();
+            ApplyDifficulty();
+            rungOpen = 0; rungShown = 0;
             Log("this run you work as " + job.Name + " (" + (JobPref == "random" ? "drawn at random" : "chosen on the title screen") + ")");
             script.Reset();
             hud.mindLines.Clear();
             Log("new run. truth drawn: " + truth + " (60/20/20 odds; the player isn't told)");
-            tale = Tale.Tell(truth, rng, fear.brain, s => Log(s));
+            tale = Tale.Tell(truth, rng, fear.brain, s => Log(s), null, 1952, 30, GhostsOnly ? "x-ghost" : null);
+            older.Clear();
+            int layers = RunDays >= 30 ? 2 : RunDays >= 14 ? 1 : 0;
+            var above = tale;
+            for (int i = 0; i < layers; i++)
+            {
+                int y = int.Parse(above.Var("year", "1960")) - 25 - rng.Next(30);
+                above = Tale.Tell(truth, rng, fear.brain, s => Log(s), above, y, 1, null);
+                older.Add(above);
+            }
+            LogBible();
             haunt.SetTale(tale);
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
@@ -388,23 +470,29 @@ namespace NightPages
             while (hud.fade < 0.995f) yield return null;
         }
 
-        IEnumerator BeginDay(int d)
+        IEnumerator BeginDay(int cal)
         {
+            int d = StoryDay(cal);
             Tour.Step("begin day: start");
             busy = true;
             player.frozen = true;
             yield return FadeOut(1.5f);
             hud.modal = Modal.None;
             hud.ClearSubtitles();
+            calendar = cal;
             day = d;
             phase = Phase.Morning;
+            if (RunDays != Days) Log("day " + cal + " of " + RunDays + ": story day " + d + (StoryDay(cal - 1) == d && cal > 1 ? " again (a slower day)" : ""));
             Tour.Step("begin day " + d + ": lighting the house");
             foreach (var r in house.rooms) r.lit = false;
             house.ShowSwitches();
             clock.StartDay();
             workDone = false;
-            script.NewDay(day);
+            int share, shares;
+            Share(cal, out share, out shares);
+            script.NewDay(day, share, shares);
             job.BeginDay(day);
+            if (script.DayDone) { workDone = true; Log("work: none today (a slower day in a long stay)"); }
             player.speedMul = 1f;
             player.eyeHeight = 1.65f;
             player.Teleport(house.bedSpawn, 200f);
@@ -413,14 +501,16 @@ namespace NightPages
             script.foreign = null;
             dread.BeginDay(day);
             uncanny.BeginDay(day);
+            dreamRetry = false;
+            ConsiderRung();
             haunt.BeginDay(day);
             house.Wear(day);
             SaveTeller();
             RefreshObjectives();
-            hud.Say(day >= Days ? "Day " + day + ". The last one." : "Day " + day, 3f);
-            if (day == 1) hud.Say(job.Intro, 5f);
-            if (day > 1 && !string.IsNullOrEmpty(fear.lastLine)) hud.Say("You wake with the dream still in the room.", 3.5f);
-            if (day >= Days) hud.Say("Your coat is on the hook by the front door. You could just go.", 5f);
+            hud.Say(LastDay ? "Day " + calendar + ". The last one." : "Day " + calendar + (RunDays != Days ? " of " + RunDays : ""), 3f);
+            if (calendar == 1) hud.Say(job.Intro, 5f);
+            if (calendar > 1 && !string.IsNullOrEmpty(fear.lastLine)) hud.Say("You wake with the dream still in the room.", 3.5f);
+            if (LastDay) hud.Say("Your coat is on the hook by the front door. You could just go.", 5f);
             yield return new WaitForSeconds(0.4f);
             hud.fadeSpeed = 0.8f;
             hud.fadeTarget = 0f;
@@ -492,6 +582,7 @@ namespace NightPages
                 Log("clock: six o'clock. Evening");
                 haunt.Evening();
                 SpawnClue();
+                if (RunDays <= 3) SpawnClue();        // a short stay: two a night
                 RefreshObjectives();
                 hud.Say("Evening. The light's going. The switches are by the doors.", 3.5f);
                 if (!workDone) hud.Say("Today's work isn't done.", 3f);
@@ -567,22 +658,22 @@ namespace NightPages
             dream.Clear();
             Tour.Step("wake: dream cleared");
             if (caught) Shake(0.08f, "it reached you in the dream");
-            if (day >= Days) yield return EndRun("night");
+            if (LastDay) yield return EndRun("night");
             else
             {
                 // Some mornings you only think you've woken.
-                if (nights.FalseAwakening(day + 1))
+                if (nights.FalseAwakening(StoryDay(calendar + 1)))
                 {
                     phase = Phase.Morning;
-                    yield return nights.FalseMorning(day + 1);
+                    yield return nights.FalseMorning(StoryDay(calendar + 1));
                 }
-                yield return BeginDay(day + 1);
+                yield return BeginDay(calendar + 1);
             }
         }
 
         void UseCellar()
         {
-            if (day >= 6 && clues >= 3 && !cellarOpened)
+            if (day >= 6 && clues >= CluesNeeded && !cellarOpened)
             {
                 cellarOpened = true;
                 Sfx.At("unlock", house.cellar.transform.position, 0.8f);
@@ -646,6 +737,19 @@ namespace NightPages
 
         // ---------------------------------------------------------------- clues
 
+        /// <summary>The whole story, as the engine built it, written to the log before day 1 (every decision visible).</summary>
+        void LogBible()
+        {
+            Log("story bible: " + RunDays + " days (" + LengthName(RunDays) + "), truth " + truth + ", " + (1 + older.Count) + " " + (older.Count > 0 ? "stories, one under another" : "story"));
+            Log("story bible: " + tale.Bible("the story"));
+            for (int i = 0; i < older.Count; i++) Log("story bible: " + older[i].Bible(i == 0 ? "under it" : "under that"));
+            var sb = new System.Text.StringBuilder("story bible: days ");
+            for (int c = 1; c <= RunDays; c++) sb.Append(c > 1 ? ", " : "").Append(c).Append(">").Append(StoryDay(c));
+            Log(sb.ToString() + " (real day > story day)");
+            if (older.Count > 0) Log("story bible: the older stor" + (older.Count > 1 ? "ies surface" : "y surfaces") + " from story day 3, in the clues and the dream's pages");
+            Log("story bible: endings need " + CluesNeeded + " clues; the last word will be: " + (tale.Epilogue ?? "(none)"));
+        }
+
         void SpawnClue()
         {
             // Today's note: the story's and the truth's, taking turns (the story's first: it's how the house introduces itself).
@@ -656,6 +760,8 @@ namespace NightPages
                 if (i < taleClues.Count) all.Add(taleClues[i]);
                 if (i < ClueTexts[(int)truth].Length) all.Add(ClueTexts[(int)truth][i]);
             }
+            // The older stories' notes come after this one's (they surface once this story is under way).
+            foreach (var o in older) all.AddRange(o.Clues());
             if (day < 2 || cluesSpawned >= all.Count) return;
             var free = new List<Room>(house.rooms);
             var room = free[rng.Next(free.Count)];
@@ -705,7 +811,7 @@ namespace NightPages
                 id = 5; title = "UNFINISHED";
                 text = job.Leave + "\n\nThe house watches you to the end of the road. It will keep.";
             }
-            else if (truth == Truth.Killer && grip >= 0.45f && clues >= 3 && faced)
+            else if (truth == Truth.Killer && grip >= 0.45f && clues >= CluesNeeded && faced)
             {
                 id = 0; title = "CONFESSION";
                 text = job.Confession;
@@ -715,7 +821,7 @@ namespace NightPages
                 id = 1; title = "THE GENTLER STORY";
                 text = job.Gentler + "\n\nIt was a good house. Anyone would have said so.\n\nIn the morning you make coffee. Two cups.";
             }
-            else if (truth == Truth.Keepers && clues >= 3 && faced)
+            else if (truth == Truth.Keepers && clues >= CluesNeeded && faced)
             {
                 id = 2; title = "REUNION";
                 text = "You go down the cellar stairs with a hammer.\n\nUnder the concrete, they have been waiting twenty years to be called by name. You say both names.";
@@ -740,6 +846,8 @@ namespace NightPages
             Log("ending: " + title + " (truth " + truth + ", grip " + grip.ToString("0.00") + ", clues " + clues +
                 ", faced " + tagFace + " / looked away " + tagAway + " / blamed " + tagBlame + ")");
             hud.header = title;
+            string last = tale != null ? tale.Epilogue : null;
+            if (!string.IsNullOrEmpty(last)) text += "\n\n<i>" + last + "</i>";
             hud.body = text + "\n\n<size=22>This run's truth: " + truth + ".  Grip " + Mathf.RoundToInt(grip * 100f) + "%.  Clues " + clues +
                        ".  Dreams remembered: " + fear.Dreams + ".</size>";
             hud.footer = "[R]  Begin again. The dreams will remember you.";
@@ -781,13 +889,13 @@ namespace NightPages
                 case Modal.Title:
                     if (!busy && In.Down(Btn.One))
                     {
-                        hardcore = !hardcore;
-                        PlayerPrefs.SetInt("np_hardcore", hardcore ? 1 : 0);
-                        PlayerPrefs.Save();
+                        Settings.S.difficulty = (Level + 1) % DifficultyNames.Length;
+                        Settings.Save();
                         ShowHardcore();
                         Sfx.Ui("pageturn", 0.5f);
                     }
                     if (!busy && In.Down(Btn.Two)) CycleJob();
+                    if (!busy && In.Down(Btn.Three)) CycleLength();
                     if (!busy && In.Down(Btn.Interact)) NewRun();
                     break;
                 case Modal.Ending:
@@ -833,7 +941,7 @@ namespace NightPages
 
             float dread = phase == Phase.Dream ? 0.5f : phase == Phase.Evening ? 0.3f : 0.12f;
             bool quiet = phase == Phase.Title || phase == Phase.Ending;
-            drone.volume = Mathf.MoveTowards(drone.volume, quiet ? 0.08f : dread + (1f - grip) * 0.3f, Time.unscaledDeltaTime * 0.3f);
+            drone.volume = Mathf.MoveTowards(drone.volume, (quiet ? 0.08f : dread + (1f - grip) * 0.3f) * Settings.S.drone, Time.unscaledDeltaTime * 0.3f);
             heart.volume = Mathf.MoveTowards(heart.volume, quiet ? 0f : Mathf.Clamp01((0.55f - grip) * 2f) * 0.8f + Mathf.Max(0f, Reactions.Level) * (phase == Phase.Dream ? 0.4f : 0f), Time.unscaledDeltaTime * 0.5f);
             heart.pitch = 1f + (1f - grip) * 0.4f;
 

@@ -328,7 +328,7 @@ namespace NightPages
             // ---- things hitting things (pitch is varied per hit, so one clip of each will do)
 
             // Wood on wood or on the floor: a dull knock with a little body.
-            Make("knock", 0.35f, t => Thump(t, 0f, 140f, 22f) * 0.6f + Thump(t, 0f, 410f, 45f) * 0.35f + Noise() * Mathf.Exp(-t * 160f) * 0.35f);
+            Make("bonk", 0.35f, t => Thump(t, 0f, 140f, 22f) * 0.6f + Thump(t, 0f, 410f, 45f) * 0.35f + Noise() * Mathf.Exp(-t * 160f) * 0.35f);
             // Crockery or glass set down hard: a short bright ring.
             Make("clink", 0.6f, t => Mathf.Exp(-t * 14f) * (Sin(2350f, t) * 0.35f + Sin(3710f, t) * 0.22f * Mathf.Exp(-t * 10f) + Sin(5480f, t) * 0.12f * Mathf.Exp(-t * 20f)) + Noise() * Mathf.Exp(-t * 300f) * 0.3f);
             // Metal: a tin or a pan, inharmonic and ringing on.
@@ -339,7 +339,7 @@ namespace NightPages
             // One thing breaking (a cup, a glass): a crack and a scatter of small pieces.
             var bits = new List<float>();
             for (float at = 0.02f; at < 0.7f; at += 0.012f + (float)rng.NextDouble() * 0.06f * (1f + at * 4f)) bits.Add(at);
-            Make("crack", 0.9f, t =>
+            Make("shatter", 0.9f, t =>
             {
                 float s = Thump(t, 0f, 260f, 30f) * 0.35f + Noise() * Mathf.Exp(-t * 60f) * 0.5f;
                 foreach (var at in bits)
@@ -380,11 +380,14 @@ namespace NightPages
             var a = g.AddComponent<AudioSource>();
             Spatial(a);
             a.clip = c;
-            a.volume = vol;
+            a.volume = vol * Settings.S.effects * (Voices.Contains(name) ? Settings.S.voices : 1f);
             a.pitch = pitch;
             a.Play();
             Object.Destroy(g, c.length / Mathf.Max(0.1f, pitch) + 0.3f);
+            Captions.Heard(name, pos, vol);
         }
+
+        static readonly HashSet<string> Voices = new HashSet<string> { "whisper", "breath", "gasp", "murmur", "lullaby" };
 
         /// <summary>Play a sound once with no position (interface clicks, stings).</summary>
         public static void Ui(string name, float vol = 1f, float pitch = 1f)
@@ -411,7 +414,7 @@ namespace NightPages
             if (spatial) Spatial(a); else a.spatialBlend = 0f;
             a.clip = Clip(name);
             a.loop = true;
-            a.volume = vol;
+            a.volume = vol * (name == "drone" || name == "heart" ? 1f : Settings.S.ambience * (Voices.Contains(name) ? Settings.S.voices : 1f));
             a.pitch = pitch;
             a.Play();
             return a;

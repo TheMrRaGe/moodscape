@@ -15,7 +15,8 @@ namespace NightPages
         public static DayClock I;
         public const float Wake = 7f * 60f, Noon = 12f * 60f, Dusk = 18f * 60f, BedFrom = 21f * 60f, PassOut = 25f * 60f;
         /// <summary>Game minutes per real second: one hour in 75 s.</summary>
-        public const float Rate = 0.5f;
+        /// <summary>Game minutes per real second (the day-length setting: 24, 32 or 48 minutes).</summary>
+        public static float Rate { get { return Settings.ClockRate; } }
 
         /// <summary>Minutes since midnight this morning (past 24*60 after midnight).</summary>
         public float minutes = Wake;

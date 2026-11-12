@@ -49,7 +49,7 @@ namespace NightPages
             Add("wardrobe", "knocking from inside the wardrobe", 1, 2f, 3, Wardrobe, () => H.wardrobe != null && (H.wardrobe.position - PlayerPos).magnitude < 7f, "trapped", "sound", "close", "someone");
             Add("steps", "footsteps behind you that match yours", 1, 2f, 2, Steps, () => !stepsOn && g.player.velocity.magnitude > 0.5f, "hunted", "sound", "behind", "self");
             Add("calendar", "every day on the calendar crossed off", 0, 1f, 4, Calendar, null, "uncanny", "sight", "time", "home");
-            var mb = Add("mirrorbehind", "in the mirror, something behind you", 2, 3f, 4, MirrorBehind, () => H.hallMirror != null && inMirror == null && H.hallMirror.Watched(Cam), "hunted", "sight", "behind", "self");
+            var mb = Add("mirrorbehind", "in the mirror, something behind you", 2, 3f, 1, MirrorBehind, () => g.RungOk(3) && H.hallMirror != null && inMirror == null && H.hallMirror.Watched(Cam), "hunted", "sight", "behind", "self");
             mb.needsCreature = true;
             Add("mirrorlate", "your reflection is late", 1, 2f, 3, MirrorLate, () => H.hallMirror != null && H.hallMirror.lag <= 0f && H.hallMirror.Watched(Cam), "self", "uncanny", "sight");
             Wire();
@@ -160,7 +160,7 @@ namespace NightPages
             hiss.transform.localPosition = Vector3.zero;
             var px = new Color[64 * 48];
             float watched = 0f, t0 = Time.time;
-            bool figure = g.day >= 4;
+            bool figure = g.Rung >= 2;
             while (Time.time - t0 < 45f)
             {
                 bool sees = Vis.Sees(Cam, H.tvScreen.transform.position);
@@ -455,7 +455,7 @@ namespace NightPages
                 Vector3 back = -Vis.Flat(Cam.transform.forward).normalized;
                 inMirror.transform.position = PlayerPos + back * 0.85f;
                 inMirror.FaceToward(PlayerPos);
-                if (H.hallMirror.Watched(Cam)) { seen += Time.deltaTime; if (seen > 0.5f && !shook) { shook = true; g.Shake(0.05f, "something behind you in the mirror"); } }
+                if (H.hallMirror.Watched(Cam)) { seen += Time.deltaTime; if (seen > 0.5f && !shook) { shook = true; g.Shake(0.05f, "something behind you in the mirror"); g.RungSeen(3, "behind you, in the mirror"); } }
                 else if (seen > 0.3f) break;                                   // you looked away from the glass
                 if (Mathf.Abs(Mathf.DeltaAngle(Cam.transform.eulerAngles.y, startYaw)) > 100f) break;   // you turned round: nothing there
                 yield return null;

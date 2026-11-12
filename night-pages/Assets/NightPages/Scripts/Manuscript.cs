@@ -147,6 +147,21 @@ namespace NightPages
             };
         }
 
+        /// <summary>What has been written so far (for the diary).</summary>
+        public List<Diary.Line> Export()
+        {
+            var l = new List<Diary.Line>();
+            foreach (var e in written) l.Add(new Diary.Line { day = e.day, passage = e.passage, option = e.option });
+            return l;
+        }
+
+        /// <summary>Put back what had been written (Continue).</summary>
+        public void Import(List<Diary.Line> lines)
+        {
+            written.Clear();
+            if (lines != null) foreach (var e in lines) written.Add(new Entry { day = e.day, passage = e.passage, option = e.option });
+        }
+
         /// <summary>Which of today's pieces of work is next (0, 1; 2 once the day's work is done).</summary>
         public int Cur { get { return cur; } }
         public int CurDay { get { return curDay; } }
@@ -157,12 +172,31 @@ namespace NightPages
         }
 
         /// <summary>A new day: nothing written yet today.</summary>
-        public void NewDay(int day) { curDay = day; cur = 0; }
+        public void NewDay(int day) { NewDay(day, 0, 1); }
+
+        /// <summary>
+        /// A new day that may share its story day with others (a long run): of that day's work, this real day does
+        /// its own slice, in order (with two passages over two days, one each). A day whose slice is empty is a quiet
+        /// day: no work to do.
+        /// </summary>
+        public void NewDay(int day, int share, int shares)
+        {
+            curDay = day;
+            int n = Day(day).Length;
+            shares = System.Math.Max(1, shares);
+            cur = n * share / shares;
+            end = n * (share + 1) / shares;
+            if (cur >= end) g.Log("work: a quiet day (story day " + day + "'s work is done on the other days)");
+        }
+        int end = 99;
+        int End { get { return System.Math.Min(end, Day(curDay).Length); } }
+        /// <summary>Is today's slice of work done (or was there none)?</summary>
+        public bool DayDone { get { return cur >= End; } }
 
         /// <summary>Open the page again for the next piece of today's work (jobs that do one at a time).</summary>
         public void Resume()
         {
-            if (cur >= Day(curDay).Length) return;
+            if (cur >= End) return;
             g.player.frozen = true;
             g.hud.Open(Modal.Writing);
             Show();
@@ -172,19 +206,19 @@ namespace NightPages
         public void SkipRest()
         {
             bool any = false;
-            while (cur < Day(curDay).Length) { written.Add(new Entry { day = curDay, passage = cur, option = -1 }); g.tagAway++; cur++; any = true; }
+            while (cur < End) { written.Add(new Entry { day = curDay, passage = cur, option = -1 }); g.tagAway++; cur++; any = true; }
             if (any) g.Shake(0.04f, "the day's work left undone");
         }
 
         /// <summary>A piece of work that never got done (a call nobody answered): counts as looking away.</summary>
         public void Skip()
         {
-            if (cur >= Day(curDay).Length) return;
+            if (cur >= End) return;
             written.Add(new Entry { day = curDay, passage = cur, option = -1 });
             g.tagAway++;
             g.Shake(0.03f, "let a piece of the day's work go undone");
             cur++;
-            if (cur >= Day(curDay).Length) g.OnChapterDone();
+            if (cur >= End) g.OnChapterDone();
         }
 
         Passage[] Day(int day) { return days[(day - 1) % days.Length]; }
@@ -193,9 +227,9 @@ namespace NightPages
 
         public void Begin(int day, string dreamLine)
         {
-            if (curDay != day) { curDay = day; cur = 0; }
+            if (curDay != day) { curDay = day; cur = 0; end = 99; }
             if (cur == 0) dreamLines[day] = dreamLine;
-            if (cur >= Day(day).Length) return;
+            if (cur >= End) return;
             g.player.frozen = true;
             g.hud.Open(Modal.Writing);
             Show();
@@ -252,7 +286,7 @@ namespace NightPages
             if (g.job != null) g.job.Chose(curDay, cur, line);
             if (DayClock.I != null) DayClock.I.Advance(g.job != null ? g.job.MinutesPer : 50f);
             cur++;
-            if (cur >= Day(curDay).Length) g.OnChapterDone();
+            if (cur >= End) g.OnChapterDone();
             else if (g.job != null && g.job.OneAtATime) { g.hud.Close(); g.player.frozen = false; }
             else Show();
         }
@@ -262,7 +296,7 @@ namespace NightPages
         {
             if (curDay != day) { curDay = day; cur = 0; }
             int guard = 0;
-            while (cur < Day(curDay).Length && guard++ < 10)
+            while (cur < End && guard++ < 10)
             {
                 if (!Writing) { g.player.frozen = true; g.hud.Open(Modal.Writing); Show(); }
                 Choose(g.rng.Next(3));

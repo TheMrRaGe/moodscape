@@ -55,6 +55,19 @@ namespace FearCore
         public float PeakHoldMin = 3f, PeakHoldMax = 5f, RelaxMin = 30f, RelaxMax = 45f;
         public float BuildUpMax = 150f, FadeMax = 20f;
         public float FalseReliefChance = 0.35f;
+        /// <summary>Difficulty's say over adaptation: the budget it can fall to and climb to, and how fast calm and
+        /// shrugged-off frights raise it (easy 0.4-1.15 ×0.6, medium 0.4-1.5 ×1, hard 0.6-1.8 ×1.5, hardcore 0.7-2.1 ×2).</summary>
+        public float AdaptFloor = 0.4f, AdaptCeil = 1.5f, CalmRate = 1f;
+        /// <summary>A fright that moved the reading less than this was shrugged off (unfazed).</summary>
+        public float UnfazedBelow = 0.05f;
+        /// <summary>How much one shrugged-off fright raises adaptation (before CalmRate).</summary>
+        public float UnfazedStep = 0.12f;
+        /// <summary>Frights shrugged off in a row (a real reaction resets it).</summary>
+        public int UnfazedStreak { get; private set; }
+        /// <summary>The game hears about each shrugged-off fright: (incident, streak).</summary>
+        public Action<Incident, int> OnUnfazed;
+        int tierBoost;          // the next build-up may start a tier higher
+        bool shortRest;         // the next rest is shorter
         public float HotLevel = 0.9f, HotSeconds = 10f;
 
         // ---- what the game tells it
@@ -110,7 +123,7 @@ namespace FearCore
         // ---------------------------------------------------------------- the numbers
 
         public float Ramp { get { return RampEpisodes <= 1 ? 1f : Lerp(0.55f, 1f, (Episode - 1f) / (RampEpisodes - 1f)); } }
-        public float AdaptFactor { get { return Adapt < 0f ? Lerp(1f, 0.4f, -Adapt) : Lerp(1f, 1.5f, Adapt); } }
+        public float AdaptFactor { get { return Adapt < 0f ? Lerp(1f, AdaptFloor, -Adapt) : Lerp(1f, AdaptCeil, Adapt); } }
         public float PeakTarget { get { return Lerp(0.5f, 0.85f, Arc); } }
 
         /// <summary>The fright points the next build-up gets.</summary>
@@ -129,6 +142,7 @@ namespace FearCore
         {
             Episode = n;
             Adapt *= 0.85f;
+            UnfazedStreak = 0; tierBoost = 0; shortRest = false;
             learner.Overnight();
             tactics.Overnight();
             pending.Clear();
@@ -152,6 +166,7 @@ namespace FearCore
         {
             float was = Adapt;
             Adapt = Math.Max(-1f, Adapt - weight);
+            UnfazedStreak = 0; tierBoost = 0; shortRest = false;
             Say("storyteller: OVERWHELMED (" + why + "). Adaptation " + F(was, "+0.00;-0.00") + " -> " + F(Adapt, "+0.00;-0.00") +
                 ", so frights get smaller (budget ×" + F(AdaptFactor) + ") and rests longer");
             if (beat == Beat.BuildUp || beat == Beat.Peak) Go(Beat.Fade, now, FadeMax, "backing off");
@@ -223,6 +238,7 @@ namespace FearCore
         void StartBuildUp(float now)
         {
             wave = waveLeft = Points();
+            if (tierBoost > 0) Say("storyteller: you shrugged off the last frights, so this wave may start a tier higher");
             Go(Beat.BuildUp, now, BuildUpMax, "budget " + F(wave, "0.0") + " points = (" + F(BasePoints, "0.#") + " + " + F(StandingPoints, "0.#") + " × standing " + F(Standing) +
                ") × difficulty " + F(Difficulty) + " × ramp " + F(Ramp) + " × adaptation " + F(AdaptFactor) + " × lateness " + F(Lerp(1f, 1.4f, Arc)) +
                "; peak at intensity " + F(PeakTarget));
@@ -259,6 +275,7 @@ namespace FearCore
             }
             // Escalate: signs first, encounters next, a confrontation last, and only once the player is on edge.
             int maxTier = Intensity >= 0.3f && progress >= 0.5f ? 2 : progress >= 0.25f ? 1 : 0;
+            maxTier = Math.Min(2, maxTier + tierBoost);     // a player who shrugged the last ones off gets the bigger ones sooner
             int want = (int)Math.Round(progress * 2f);
             if (TryFire(now, waveLeft, maxTier, false, want)) nextAt = now + Gap(progress);
             else nextAt = now + 3f;
@@ -267,6 +284,14 @@ namespace FearCore
         void StartRelax(float now, float scale = 1f)
         {
             float len = (RelaxMin + (float)rng.NextDouble() * (RelaxMax - RelaxMin)) * Lerp(1.3f, 0.7f, Arc) * (Adapt < 0f ? 1f - Adapt * 0.6f : 1f) * scale;
+            if (shortRest)
+            {
+                float k = Lerp(1f, 0.6f, Math.Min(UnfazedStreak, 3) / 3f);
+                len *= k;
+                shortRest = false;
+                Say("storyteller: a shorter rest (×" + F(k) + ") because the last " + UnfazedStreak + " fright" + (UnfazedStreak == 1 ? "" : "s") + " didn't move you");
+            }
+            else tierBoost = 0;
             Go(Beat.Relax, now, len, "a real rest of " + F(len, "0") + " s");
             dreadDone = false;
             reliefPlanned = Episode >= 2 && scale >= 1f && rng.NextDouble() < FalseReliefChance;
@@ -358,7 +383,26 @@ namespace FearCore
                 float y = after - p.before;
                 Say("storyteller: learned from '" + p.inc.label + "': " + learner.Learn(p.inc.domain, p.inc.id, p.inc.tags, y));
                 if (Outcome != null) Outcome(p.inc, y);
+                if (y < UnfazedBelow && after < 0.45f) Unfazed(p.inc, y);
+                else if (y > 0.15f && UnfazedStreak > 0) { Say("storyteller: that one landed (reaction " + F(y, "+0.00;-0.00") + "); the unfazed streak of " + UnfazedStreak + " ends"); UnfazedStreak = 0; }
             }
+        }
+
+        /// <summary>
+        /// A fright landed and the player didn't react: push harder. Adaptation rises (scaled by difficulty), the next
+        /// rest is shorter, the next wave may start a tier higher, and the game is told (it may bring the figure on).
+        /// What they shrugged off already scores lower with the learner, so it reaches for other kinds of fear.
+        /// </summary>
+        void Unfazed(Incident inc, float y)
+        {
+            UnfazedStreak++;
+            float was = Adapt;
+            Adapt = Math.Min(1f, Adapt + UnfazedStep * CalmRate);
+            shortRest = true;
+            tierBoost = 1;
+            Say("storyteller: unfazed by " + inc.label + " (reaction " + F(y, "+0.00;-0.00") + ", " + UnfazedStreak + " in a row). Adaptation " + F(was, "+0.00;-0.00") + " -> " +
+                F(Adapt, "+0.00;-0.00") + " (budget ×" + F(AdaptFactor) + "), next rest shorter, next wave may start a tier higher");
+            if (OnUnfazed != null) OnUnfazed(inc, UnfazedStreak);
         }
 
         /// <summary>Teach the learner from something the game measured itself (a dream change, a monster gene).</summary>
@@ -369,7 +413,7 @@ namespace FearCore
         void Adaptation(float now, float dt, float fear, bool watching)
         {
             // Calm stretches: the player is coping, so it may push a little harder (about +1 over fifteen minutes).
-            if (watching && Intensity < 0.3f && (beat == Beat.BuildUp || beat == Beat.Relax)) Adapt = Math.Min(1f, Adapt + dt / 900f);
+            if (watching && Intensity < 0.3f && (beat == Beat.BuildUp || beat == Beat.Relax)) Adapt = Math.Min(1f, Adapt + dt / 900f * CalmRate);
             // The sweet spot: very frightened for too long is past enjoyable.
             if (fear >= HotLevel && watching) hotFor += dt; else hotFor = Math.Max(0f, hotFor - dt * 0.5f);
             if (hotFor > HotSeconds) { hotFor = 0f; Overwhelmed("very frightened for " + F(HotSeconds, "0") + " s", 0.35f, now); }

@@ -29,7 +29,7 @@ namespace NightPages
     /// living in the attic), and internet horror's own grammar (start mundane, one small wrongness, a pattern,
     /// confirmation; rules lists; never explain it all). The rest is made up to sit between them.
     /// </summary>
-    public class Tale
+    public partial class Tale
     {
         public class Piece
         {
@@ -54,7 +54,9 @@ namespace NightPages
         }
 
         public Truth truth;
-        public Piece who, what, why, keepsake;
+        public Piece who, what, why, keepsake, explain, act;
+        /// <summary>Parts the story must not reuse (a long run's older story can't be the same people).</summary>
+        public readonly HashSet<string> avoid = new HashSet<string>();
         public readonly List<Piece> signs = new List<Piece>(), rules = new List<Piece>(), scraps = new List<Piece>();
         public readonly HashSet<string> tags = new HashSet<string>();
         readonly Dictionary<string, string> vars = new Dictionary<string, string>();
@@ -64,19 +66,71 @@ namespace NightPages
 
         public static Tale Tell(Truth truth, System.Random rng, FearCore.Learner brain, System.Action<string> log)
         {
+            return Tell(truth, rng, brain, log, null, 1952, 30, null);
+        }
+
+        /// <summary>
+        /// Tell a story. `under`: a newer story this one lies beneath (a long run's older story): it can't reuse that
+        /// story's people or events, and it shares what is really going on. `year0`/`span`: when it happened.
+        /// `explainOnly`: limit what can really be going on (the "ghosts only" option), or null.
+        /// </summary>
+        public static Tale Tell(Truth truth, System.Random rng, FearCore.Learner brain, System.Action<string> log, Tale under, int year0, int span, string explainOnly)
+        {
             var t = new Tale { truth = truth, rng = rng };
+            if (under != null)
+                foreach (var p in new[] { under.who, under.what, under.why, under.act, under.keepsake }) if (p != null) t.avoid.Add(p.id);
             t.who = t.Pick("who", brain);
             t.what = t.Pick("what", brain);
             t.why = t.Pick("why", brain);
+            // What is really going on: shared with the story it lies under, so a long run has one answer.
+            if (under != null && under.explain != null) { t.explain = under.explain; foreach (var tg in under.explain.tags) t.tags.Add(tg); }
+            else if (explainOnly != null) { t.explain = Find("explain", explainOnly); if (t.explain != null) foreach (var tg in t.explain.tags) t.tags.Add(tg); }
+            else t.explain = t.Pick("explain", brain);
+            t.act = t.Pick("act", brain);
             int nSigns = 4 + rng.Next(2);
             for (int i = 0; i < nSigns; i++) { var s = t.Pick("sign", brain); if (s != null) t.signs.Add(s); }
             t.keepsake = t.Pick("keepsake", brain);
             for (int i = 0; i < 3; i++) { var r = t.Pick("rule", brain); if (r != null) t.rules.Add(r); }
             for (int i = 0; i < 2; i++) { var r = t.Pick("scrap", brain); if (r != null) t.scraps.Add(r); }
-            t.vars["year"] = (1952 + rng.Next(30)).ToString();
+            t.vars["year"] = (year0 + rng.Next(System.Math.Max(1, span))).ToString();
             t.vars["season"] = new[] { "winter", "the autumn", "that summer", "the spring" }[rng.Next(4)];
-            if (log != null) log("tale: " + t.Summary);
+            if (log != null) log((under != null ? "tale (older, underneath): " : "tale: ") + t.Summary);
             return t;
+        }
+
+        static Piece Find(string slot, string id) { foreach (var p in Library) if (p.slot == slot && p.id == id) return p; return null; }
+
+        /// <summary>A story put back together from the diary (the same parts, in the same order, with the same year).</summary>
+        public static Tale Restore(Truth truth, Diary.TaleSave s, System.Random rng)
+        {
+            var t = new Tale { truth = truth, rng = rng };
+            System.Func<string, string, Piece> take = (slot, id) =>
+            {
+                if (string.IsNullOrEmpty(id)) return null;
+                var p = Find(slot, id);
+                if (p == null) return null;
+                foreach (var tg in p.tags) t.tags.Add(tg);
+                if (p.sign != null) t.tags.Add("sign:" + p.sign);
+                foreach (var kv in p.v) if (!t.vars.ContainsKey(kv.Key)) t.vars[kv.Key] = kv.Value;
+                return p;
+            };
+            t.who = take("who", s.who); t.what = take("what", s.what); t.why = take("why", s.why);
+            t.explain = take("explain", s.explain); t.act = take("act", s.act);
+            foreach (var id in s.signs) { var p = take("sign", id); if (p != null) t.signs.Add(p); }
+            t.keepsake = take("keepsake", s.keepsake);
+            foreach (var id in s.rules) { var p = take("rule", id); if (p != null) t.rules.Add(p); }
+            foreach (var id in s.scraps) { var p = take("scrap", id); if (p != null) t.scraps.Add(p); }
+            t.vars["year"] = string.IsNullOrEmpty(s.year) ? "1960" : s.year;
+            t.vars["season"] = string.IsNullOrEmpty(s.season) ? "winter" : s.season;
+            return t;
+        }
+
+        /// <summary>Things about you the story's words can use ({me}: your name; {you_young}: "as a boy").</summary>
+        public void Meet(Character c)
+        {
+            if (c == null) return;
+            vars["me"] = c.Name;
+            vars["you_young"] = c.Young;
         }
 
         Piece Pick(string slot, FearCore.Learner brain)
@@ -86,7 +140,7 @@ namespace NightPages
             float total = 0f;
             foreach (var p in Library)
             {
-                if (p.slot != slot || Chosen(p) || !Fits(p)) continue;
+                if (p.slot != slot || Chosen(p) || avoid.Contains(p.id) || !Fits(p)) continue;
                 // The learner's nudge: kinds of thing that have frightened this player before come up more.
                 float learned = brain != null ? Mathf.Clamp(brain.Expect("story", p.id, p.tags), -0.5f, 1f) : 0f;
                 float w = p.w * (1f + learned);
@@ -103,7 +157,7 @@ namespace NightPages
             return pick;
         }
 
-        bool Chosen(Piece p) { return p == who || p == what || p == why || p == keepsake || signs.Contains(p) || rules.Contains(p) || scraps.Contains(p); }
+        bool Chosen(Piece p) { return p == who || p == what || p == why || p == keepsake || p == explain || p == act || signs.Contains(p) || rules.Contains(p) || scraps.Contains(p); }
 
         bool Fits(Piece p)
         {
@@ -157,6 +211,7 @@ namespace NightPages
             {
                 var sb = new StringBuilder();
                 sb.Append(who != null ? who.id : "?").Append(" / ").Append(what != null ? what.id : "?").Append(" / ").Append(why != null ? why.id : "?");
+                sb.Append("; really ").Append(explain != null ? explain.id : "?").Append("; act ").Append(act != null ? act.id : "none");
                 sb.Append("; signs: ");
                 for (int i = 0; i < signs.Count; i++) sb.Append(i > 0 ? ", " : "").Append(signs[i].sign);
                 sb.Append("; keepsake: ").Append(keepsake != null ? keepsake.id : "none");
@@ -201,12 +256,18 @@ namespace NightPages
         {
             var l = new List<string>();
             if (what != null && what.lines.Length > 0) l.Add(Fill(what.lines[0]));
+            if (act != null && act.lines.Length > 0) l.Add(Fill(act.lines[0]));
             if (rules.Count > 0) l.Add(RulesNote());
             if (keepsake != null && keepsake.lines.Length > 0) l.Add(Fill(keepsake.lines[0]));
             if (why != null && why.lines.Length > 0) l.Add(Fill(why.lines[0]));
             foreach (var s in scraps) if (s.lines.Length > 0) l.Add(Fill(s.lines[0]));
+            // Last, the note that leans toward what is really going on (it can be read either way until the end).
+            if (explain != null && explain.lines.Length > 0) l.Add(Fill(explain.lines[0]));
             return l;
         }
+
+        /// <summary>The last word of the ending, from what was really going on.</summary>
+        public string Epilogue { get { return explain != null && explain.lines.Length > 2 ? Fill(explain.lines[2]) : null; } }
 
         /// <summary>The grandparents' list of rules, as a note: "If you hear her slippers in the hall after ten..."</summary>
         public string RulesNote()
@@ -214,7 +275,7 @@ namespace NightPages
             var sb = new StringBuilder();
             sb.Append(Fill(rng.Next(2) == 0 ? "A card in Grandma's handwriting, tucked behind the {room} clock. Numbered, like a recipe.\n\n" : "Typed on Grandpa's machine, folded in four. No title. Numbered.\n\n"));
             for (int i = 0; i < rules.Count; i++) sb.Append(i + 1).Append(". ").Append(Fill(rules[i].lines[0])).Append("\n");
-            sb.Append(Fill(rng.Next(2) == 0 ? "\nThe last line has been written over so many times the paper has worn through." : "\nUnderneath, in pencil, in a hand like yours as a boy: \"what happens if we don't\""));
+            sb.Append(Fill(rng.Next(2) == 0 ? "\nThe last line has been written over so many times the paper has worn through." : "\nUnderneath, in pencil, in a hand like yours {you_young}: \"what happens if we don't\""));
             return sb.ToString();
         }
 
@@ -224,6 +285,8 @@ namespace NightPages
             var l = new List<string>();
             foreach (var p in new[] { who, what, why })
                 if (p != null) for (int i = 1; i < p.lines.Length; i++) l.Add(Fill(p.lines[i]));
+            if (act != null && act.lines.Length > 1) l.Add(Fill(act.lines[1]));
+            if (explain != null && explain.lines.Length > 1) l.Add(Fill(explain.lines[1]));
             foreach (var s in signs) if (s.lines.Length > 1) l.Add(Fill(s.lines[1]));
             if (keepsake != null && keepsake.lines.Length > 1) l.Add(Fill(keepsake.lines[1]));
             foreach (var s in scraps) if (s.lines.Length > 1) l.Add(Fill(s.lines[1]));
@@ -344,7 +407,7 @@ namespace NightPages
                 .L("The pantry inventory, kept every week for thirty years. The last entries are all for things nobody in the house would eat.",
                    "It's hungry. They fed it. Now they're gone and there's only me, and I can hear it in the walls, being patient."));
             L.Add(P("why", "mine").T("possessive", "jealous").Bans("nothing")
-                .L("Grandma's handwriting on the back of a photograph of you: \"{Name} doesn't like it when he has visitors.\"",
+                .L("Grandma's handwriting on the back of a photograph of you: \"{Name} doesn't like it when {me} has visitors.\"",
                    "{Name} won't share the house. Not with the nurse, not with the lodger, not with me. Every guest left early. I'm not a guest. I don't get to leave."));
             L.Add(P("why", "never").T("notperson").Only(H)
                 .L("Grandpa's ledger, the last page. \"Whatever it is, it learned to be {name} by watching. It's still learning. Don't let it watch you.\"",
@@ -545,6 +608,7 @@ namespace NightPages
             L.Add(P("scrap", "x-clocks").L("An inventory of clocks in the house, eleven of them. Ten are ticked off. Beside the eleventh: \"don't wind\".",
                 "There are eleven clocks in this house. Ten of them I can find."));
 
+            BuildMore(L);
             return L;
         }
     }

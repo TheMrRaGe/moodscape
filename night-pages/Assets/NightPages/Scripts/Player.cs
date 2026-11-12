@@ -67,7 +67,7 @@ namespace NightPages
             if (b.size.y > 2.2f || b.max.y < 0.3f || b.size.x > 4f || b.size.z > 4f) return;            // a wall, a step, the floor
             lastBump = Time.time;
             int k = Physical.Jostle(b.center, Mathf.Max(b.extents.x, b.extents.z) + 0.1f, 0.1f * m.magnitude, b.extents.y - 0.06f);
-            if (k > 0) Sfx.At("knock", hit.point, 0.15f + 0.05f * m.magnitude, 0.7f + Random.value * 0.15f);
+            if (k > 0) Sfx.At("bonk", hit.point, 0.15f + 0.05f * m.magnitude, 0.7f + Random.value * 0.15f);
         }
         float lastBump;
 
@@ -376,7 +376,8 @@ namespace NightPages
                 }
                 else
                 {
-                    Vector2 look = In.Look * 2.2f;
+                    Vector2 look = In.Look * 2.2f * Settings.S.mouse;
+                    if (Settings.S.invertY) look.y = -look.y;
                     // Working with your hands (scrubbing, turning a key, pouring): the mouse is doing the work, not looking.
                     if (Hands.I != null && Hands.I.Busy) look *= 0.12f;
                     // Holding something light: the wheel brings it nearer or holds it further out, and with the middle
@@ -384,7 +385,7 @@ namespace NightPages
                     if (carrying != null && !carrying.Heavy)
                     {
                         float wheel = In.Scroll;
-                        if (wheel != 0f) holdReach = Mathf.Clamp(holdReach + wheel * 0.12f, 0.4f, 2.2f);
+                        if (wheel != 0f) holdReach = Mathf.Clamp(holdReach + wheel * Settings.S.holdStep, 0.4f, 2.2f);
                         if (In.Held(Btn.Turn))
                         {
                             holdTurn = Quaternion.AngleAxis(look.x * 1.6f, Vector3.up) * Quaternion.AngleAxis(look.y * 1.6f, Vector3.right) * holdTurn;
@@ -423,7 +424,7 @@ namespace NightPages
                 float loose = (1f - grip) * (1f - grip);
                 cam.transform.localPosition = new Vector3(0f, eyeCur, 0f);
                 cam.transform.localRotation = Quaternion.Euler(pitch, 0f, Mathf.Sin(Time.time * 0.7f) * loose * 5f + Roll);
-                cam.fieldOfView = 68f + fovOffset + Mathf.Sin(Time.time * 0.9f) * loose * 4f;
+                cam.fieldOfView = Settings.S.fov + fovOffset + Mathf.Sin(Time.time * 0.9f) * loose * 4f;
             }
 
             Vector3 flat = velocity; flat.y = 0f;

@@ -93,7 +93,7 @@ namespace NightPages
             if (v > 2.2f) thrown = false;
         }
 
-        static readonly string[] SoundOf = { "knock", "clink", "clink", "clang", "flop", "flop", "flop", "knock", "flop" };
+        static readonly string[] SoundOf = { "bonk", "clink", "clink", "clang", "flop", "flop", "flop", "bonk", "flop" };
 
         void Knock(Vector3 at, float v)
         {
@@ -132,7 +132,7 @@ namespace NightPages
             RaycastHit hit;
             if (Physics.Raycast(at + Vector3.up * 0.2f, Vector3.down, out hit, 3f, ~0, QueryTriggerInteraction.Ignore)) floor = hit.point;
 
-            Sfx.At("crack", at, 0.85f, matter == Matter.Glass ? 1.3f : 0.95f + Random.value * 0.1f);
+            Sfx.At("shatter", at, 0.85f, matter == Matter.Glass ? 1.3f : 0.95f + Random.value * 0.1f);
             if (matter != Matter.Egg) Noise.Make(at, Mathf.Clamp01(0.45f + v * 0.04f), "a " + label + " smashing");
 
             // Whatever was in it.

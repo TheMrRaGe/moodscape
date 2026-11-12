@@ -462,9 +462,16 @@ namespace NightPages
             return Tex.Mat(Tex.Wallpaper, u, v, 1.2f, AgedPaper);
         }
 
+        /// <summary>The seed to build the next house from (0: a new one). BuiltSeed: the one the current house was built from.</summary>
+        public static int Seed, BuiltSeed;
+
         public void BuildAll(Material paintingMat)
         {
             paintMat = paintingMat;
+            // Every random choice in the house comes from this one seed, so a saved run gets back the same house.
+            BuiltSeed = Seed != 0 ? Seed : System.Environment.TickCount & 0x7fffffff | 1;
+            Seed = 0;
+            Random.InitState(BuiltSeed);
             Catalogue.NewRun(Random.Range(1, int.MaxValue));
             PickSurfaces();
             ChooseLayout();

@@ -1378,6 +1378,13 @@ namespace NightPages
                 var told = g.tale.Pages();
                 for (int i = 0; i < 3 && told.Count > 0; i++) { int k = rng.Next(told.Count); pages.Add(told[k]); told.RemoveAt(k); }
                 if (g.tale.rules.Count > 0 && rng.Next(3) == 0) pages.Add(g.tale.RulesNote());
+                // A long stay: the older story underneath starts to show through.
+                if (g.day >= 3)
+                    foreach (var o in g.older)
+                    {
+                        var deeper = o.Pages();
+                        if (deeper.Count > 0) pages.Add(deeper[rng.Next(deeper.Count)]);
+                    }
             }
             // Tonight's order is tonight's own.
             for (int i = pages.Count - 1; i > 0; i--) { int j = rng.Next(i + 1); var t = pages[i]; pages[i] = pages[j]; pages[j] = t; }

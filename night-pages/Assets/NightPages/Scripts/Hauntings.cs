@@ -63,6 +63,7 @@ namespace NightPages
             Add("behind", "it was right behind you", 2, 3f, 3, Behind, FearTypes.Hunted, "near", "behind").needsCreature = true;
             // The grounded ones: what people really report, done the way they report it (see HauntingsGrounded).
             InitGrounded();
+            InitLadder();
 
             // Where you hide gets the worst of it, once the house has learned where that is.
             teller.Bias = i =>
@@ -136,6 +137,7 @@ namespace NightPages
             if (bleedLoop != null) Destroy(bleedLoop.gameObject);
             bleedLoop = null;
             bleedFigure = false;
+            glimpse = false;
             Unseal();
             if (g.halluc != null) g.halluc.Clear();
         }
@@ -168,6 +170,7 @@ namespace NightPages
             // How it reads you: the reaction level (face, heart, voice, how you move), and whether you're there to see.
             bool watching = Reactions.Watching && !(FaceReader.Present && FaceReader.LookingAway);
             teller.Tick(now, Mathf.Clamp01(Reactions.Level), watching);
+            TickLadder(now);
 
             // The monster's leash: while it is in the house and close, the gauge fills.
             float dist = figure != null ? (figure.position - PlayerPos).magnitude : float.PositiveInfinity;
@@ -463,7 +466,7 @@ namespace NightPages
 
         IEnumerator Flicker(Room room)
         {
-            for (int i = 0; i < 6; i++)
+            for (int i = 0; i < (Settings.S.reduceFlashing ? 1 : 6); i++)
             {
                 room.darkUntil = Time.time + Random.Range(0.05f, 0.2f);
                 room.light.intensity = 0f;
@@ -494,7 +497,7 @@ namespace NightPages
             Vector3 eye = PlayerPos + Vector3.up * 1.2f;
             float dist = 1.15f;
             if (Physics.Raycast(eye, back, dist + 0.45f)) { dist = 0.8f; if (Physics.Raycast(eye, back, dist + 0.35f)) return false; }
-            var look = g.fear.Compose(g.day <= 4 ? 1 : 2);
+            var look = g.fear.Compose(Mathf.Min(g.day <= 4 ? 1 : 2, Settings.ScareCap));
             look[Monster.Shift] = 0;
             behind = Monster.Create(null, look);
             behind.transform.position = new Vector3(PlayerPos.x, PlayerPos.y, PlayerPos.z) + back * dist;
@@ -529,6 +532,7 @@ namespace NightPages
                     Sfx.Ui("sting", 1f);
                     Sfx.At("slam", behind.transform.position + Vector3.up, 0.5f, 0.6f);
                     g.Shake(0.12f, "it was right behind you");
+                    g.RungSeen(3, "right behind you");
                     if (g.dread != null) g.dread.BigFright();
                 }
                 else if (now - behindSince > 15f)
@@ -567,13 +571,14 @@ namespace NightPages
             var h = g.house;
             Vector3 spot = (h.hallNorth - PlayerPos).sqrMagnitude > (h.hallSouth - PlayerPos).sqrMagnitude ? h.hallNorth : h.hallSouth;
             if (Vis.Sees(Cam, spot + Vector3.up * 1.6f) || (spot - PlayerPos).magnitude < 6f) return false;
-            var look = g.fear.Compose(g.day <= 4 ? 1 : 2);
+            var look = g.fear.Compose(FigureCap);
             houseMonster = Monster.Create(null, look);
             figure = houseMonster.transform;
             figure.position = spot;
-            stalking = g.day >= 6;
+            glimpse = false;
+            stalking = g.RungOk(4);
             g.Log("it is in the house, composed from what frightens you: " + g.fear.DescribeLook(look) +
-                  (stalking ? " (from day 6 it comes for you while you aren't looking)" : ""));
+                  (stalking ? " (rung 4: it comes for you while you aren't looking)" : " (rung " + g.Rung + ": seen whole, at a distance)"));
             figureSeen = 0f;
             figureUntil = Time.time + 75f;
             return true;
@@ -588,6 +593,8 @@ namespace NightPages
             // If the camera can see the player's face: it doesn't count as watched when they look away from the screen.
             if (FaceReader.Present && FaceReader.LookingAway) seen = false;
             if (seen) figureSeen += Time.deltaTime;
+            if (UpdateGlimpse(now, seen, dist)) return;
+            if (stalking && seen) g.RungSeen(4, "it was in the house, and it didn't go when you looked");
             // And late in the run, every time they really blink, it is closer.
             if (stalking && FaceReader.Present && FaceReader.Blinks != lastBlinks)
             {
@@ -625,6 +632,7 @@ namespace NightPages
                     Destroy(figure.gameObject);
                     figure = null; houseMonster = null;
                     g.Shake(0.1f, "the monster reached you in the " + room.name);
+                    if (g.Rung >= 5) g.RungSeen(5, "it reached you in the " + room.name);
                     g.hud.Say("When the light comes back, you are alone.", 4f);
                     return;
                 }
@@ -637,6 +645,7 @@ namespace NightPages
                 Destroy(figure.gameObject);
                 figure = null;
                 g.Shake(0.06f, "saw the figure in the hall");
+                g.RungSeen(2, "standing in the hall");
                 if (g.dread != null) g.dread.BigFright();
                 g.hud.Say("There was someone standing in the hall.", 3.5f);
             }

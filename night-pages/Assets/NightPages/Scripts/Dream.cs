@@ -156,6 +156,8 @@ namespace NightPages
             torch.enabled = false;
             // Hard, not impossible: enough night to cross it twice over, not enough to see all of it.
             nightLength = (60f + size * size * 4.5f) * 1.3f;       // (the extra is for time spent hiding from it)
+            if (Settings.S.difficulty == 0) nightLength *= 1.4f;     // easy: longer nights
+            if (Settings.S.difficulty == 2 && g.dreamRetry) { nightLength *= 0.75f; g.Log("dream: hard, and dreamt again: a quarter less night this time"); }
             QualitySettings.pixelLightCount = Mathf.Max(QualitySettings.pixelLightCount, 8);      // the room bulbs near you all count
             stalker = new MazeStalker(g, maze, dyn, day, Origin.y);
             stalker.onCatch = Die;

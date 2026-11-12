@@ -3,7 +3,7 @@ using UnityEngine;
 
 namespace NightPages
 {
-    public enum Modal { None, Title, Writing, Reading, Ending, Paused }
+    public enum Modal { None, Title, Writing, Reading, Ending, Paused, Menu }
 
     /// <summary>
     /// Everything drawn over the game: subtitles, the task list, the typewriter page, the fade, and the
@@ -172,6 +172,16 @@ namespace NightPages
 
             if (!string.IsNullOrEmpty(sub) && modal != Modal.Writing && modal != Modal.Reading)
                 Shadowed(new Rect(W * 0.15f, H - 190f, W * 0.7f, 120f), sub, sText, paper);
+
+            // Captions for sounds, bottom left, small.
+            Captions.Tidy();
+            if (modal == Modal.None && Captions.Showing.Count > 0)
+            {
+                var cs = Settings.S.captionSize;
+                var st = cs == 0 ? sSmall : cs == 2 ? sText : sPage;
+                float cy = H - 80f - Captions.Showing.Count * 42f;
+                foreach (var kv in Captions.Showing) { Shadowed(new Rect(40f, cy, W * 0.5f, 40f), kv.Key, new GUIStyle(st) { alignment = TextAnchor.MiddleLeft }, paper); cy += 42f; }
+            }
 
             if (modal == Modal.Title || modal == Modal.Ending)
             {
