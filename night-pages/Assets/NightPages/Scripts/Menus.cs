@@ -362,7 +362,7 @@ namespace NightPages
                                    "Off: what it learns about you is kept only until you quit."));
             p.Add(MenuEntry.Toggle("The AI voice", () => Settings.S.voice, b => Settings.S.voice = b,
                                    voice != null && voice.Ready ? "A language model writes some notes and dream pages from the story and what moves you. It sees no camera or sound, only the story and a summary of your fears."
-                                                                : "Needs a key (see nightpages-voice.json). Off without one; the written text is used."));
+                                                                : "Needs a model: install Ollama (free, runs on this PC) and pull one, or add a key in nightpages-voice.json. Without one, the written text is used."));
             p.Add(MenuEntry.Act("Forget me", () => menu.Push(ConfirmPage("Forget you?", "What the house has learned about what frightens you, and your habits, will be deleted. " +
                                                                     "The game starts fresh with you next time it starts.", "Forget me", ForgetMe))));
             p.Add(MenuEntry.Act("Back", () => menu.Back()));
