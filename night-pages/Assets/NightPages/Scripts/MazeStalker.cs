@@ -19,6 +19,10 @@ namespace NightPages
     public class MazeStalker
     {
         public enum State { Calm, Warning, Hunt, Search, Toy, Found, Leave }
+        // The fly-brain body's posture while hunting (see FlyBody), and until when it holds it.
+        FlyBody.Act posture = FlyBody.Act.Press;
+        float postureUntil;
+        Vector3 withdrawTo;
         public State state = State.Calm;
         public Monster It { get; private set; }
         public DreamMaze.HideSpot Hidden { get; private set; }
@@ -430,7 +434,37 @@ namespace NightPages
                         Vector3 v = g.player.velocity; v.y = 0f;
                         if (v.magnitude > 3f) lastKnown = pp + v.normalized * Mathf.Min(4f, v.magnitude * 1.2f);
                     }
-                    float left = Move(lastKnown, sees || now - lastSeenAt < 2f ? 3.9f : 3.1f, dt);
+                    float spd = sees || now - lastSeenAt < 2f ? 3.9f : 3.1f;
+                    // The fly brain decides how it moves, moment to moment: press in, freeze, creep, pull back, twitch.
+                    var fb = g.flyBody;
+                    if (fb != null && surf == 0)
+                    {
+                        bool watched = Vis.Sees(cam, It.HeadPos, It.transform);
+                        fb.Drives(dt, Mathf.Clamp01(Reactions.Level), watched, dist);
+                        if (now > postureUntil && (sees || dist < 10f))
+                        {
+                            var was = posture;
+                            posture = fb.Choose(sees, watched, dist, maze.Dark(Pos), g.player.velocity.magnitude > 3f, Hidden != null, Mathf.Clamp01(Reactions.Level), now, s => g.Log(s));
+                            postureUntil = now + (posture == FlyBody.Act.Freeze ? Random.Range(1.2f, 2.6f) : posture == FlyBody.Act.Withdraw ? 2.5f : Random.Range(1.0f, 2.0f));
+                            if (posture == FlyBody.Act.Withdraw) withdrawTo = maze.RandomPoint(Pos, 3f, 6f, true, cam);
+                            if (posture == FlyBody.Act.Twitch)
+                            {
+                                Sfx.At("crack", It.HeadPos, 0.6f, 1.3f);
+                                It.transform.position += Vector3.Cross(Vector3.up, Vis.Flat(pp - Pos).normalized) * (Random.value < 0.5f ? -0.25f : 0.25f);
+                            }
+                            if (posture != was) g.Log("dream maze: it " + FlyBody.ActNames[(int)posture] + " (" + fb.Describe() + ")");
+                        }
+                    }
+                    else posture = FlyBody.Act.Press;
+                    float left;
+                    switch (posture)
+                    {
+                        case FlyBody.Act.Freeze: Face(pp, dt); left = 99f; break;
+                        case FlyBody.Act.Twitch: Face(pp, dt); left = 99f; break;
+                        case FlyBody.Act.Creep: left = Move(lastKnown, spd * 0.4f, dt); break;
+                        case FlyBody.Act.Withdraw: Move(withdrawTo, 3.2f, dt); left = 99f; break;
+                        default: left = Move(lastKnown, spd * 1.1f, dt); break;
+                    }
                     if (sees && dist < 1.15f && surf == 0) { Catch("it reached you"); return; }
                     if (Hidden != null && sawEnter && maze.Rooms(Pos, Hidden.inside) <= 1) { Go(State.Found, "watched you hide, and is coming to get you"); return; }
                     if (!sees && left < 1.6f)

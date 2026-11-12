@@ -108,5 +108,28 @@ namespace NightPages
             day = keepDay;
             phase = Phase.Morning;
         }
+            /// <summary>
+        /// Studio: does the fly body learn? A pretend player who only jumps when it freezes in full view: after a few
+        /// hundred moments, it should freeze in view far more than it did at first.
+        /// </summary>
+        void FlyBodyCheck(StringBuilder summary)
+        {
+            var fb = new FlyBody(teller.learner.instinct);
+            int early = 0, late = 0;
+            float t = 0f, reaction = 0.1f;
+            for (int i = 0; i < 600; i++)
+            {
+                t += 1f;
+                var a = fb.Choose(true, true, 4f, false, false, false, reaction, t, null);
+                if (i < 100 && a == FlyBody.Act.Freeze) early++;
+                if (i >= 500 && a == FlyBody.Act.Freeze) late++;
+                t += 3.1f;
+                fb.Observe(a == FlyBody.Act.Freeze ? 0.7f : 0.1f, t);
+                fb.hunger = 0.3f; fb.nerve = 0.7f;
+            }
+            Log("fly body: a pretend player who only jumps when it freezes in view: it froze " + early + " times in its first 100 moments, " + late + " in its last 100");
+            if (late <= early + 10) Problem("fly body: it didn't learn to freeze for a player who only reacts to that (" + early + " -> " + late + ")");
+            summary.Append("  \"fly_body\": \"").Append(early).Append(" -> ").Append(late).Append("\",\n");
+        }
     }
 }

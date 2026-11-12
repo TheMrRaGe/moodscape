@@ -75,6 +75,8 @@ namespace NightPages
         public FearEngine fear;
         /// <summary>The FEAR Engine's storyteller (FearCore): when, how big and which fright; its learner is shared with the dreams.</summary>
         public FearCore.Storyteller teller;
+        /// <summary>The fly-brain body that moves the dream's monster (learns which ways of moving frighten you).</summary>
+        public FlyBody flyBody;
         public Hallucinations halluc;
         public Uncanny uncanny;
         public Nights nights;
@@ -141,6 +143,9 @@ namespace NightPages
             try { if (Settings.S.remember && System.IO.File.Exists(TellerPath)) brain.Load(System.IO.File.ReadAllText(TellerPath)); }
             catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't read the storyteller's memory (" + e.Message + "); starting fresh"); }
             teller = new FearCore.Storyteller(brain) { Log = s => Log(s) };
+            // The dream monster's body: the same fly wiring, as movement (see FlyBody).
+            flyBody = new FlyBody(brain.instinct);
+            if (Settings.S.remember) flyBody.Load();
             ApplyDifficulty();
             // What it learned about your habits in earlier runs (weaker now, but it remembers).
             try { if (Settings.S.remember && System.IO.File.Exists(HabitsPath)) { teller.tactics.Load(System.IO.File.ReadAllText(HabitsPath)); Log("habits: remembered from before: " + Habits.Describe(this)); } }
@@ -227,6 +232,7 @@ namespace NightPages
         public void SaveTeller()
         {
             if (teller == null || !MayRemember) return;
+            if (flyBody != null) flyBody.Save();
             try { System.IO.File.WriteAllText(TellerPath, teller.learner.Save()); }
             catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't save the storyteller's memory: " + e.Message); }
             try { System.IO.File.WriteAllText(HabitsPath, teller.tactics.Save()); }
@@ -882,7 +888,7 @@ namespace NightPages
                                  "\nlines: faced " + tagFace + " / away " + tagAway + " / blamed " + tagBlame +
                                  "\nreaction " + Reactions.Level.ToString("+0.00;-0.00") + ", led by " + Reactions.Source + Reactions.Describe() +
                                  "\n" + link.Status + (VRRig.Active ? "\nVR: on" : "") + "\nclock " + clock.Now + " · work: " + job.Name + (workDone ? " (done)" : "") +
-                                 "\nstoryteller: " + teller.Status() + "\nlearner: " + teller.learner.Describe() +
+                                 "\nstoryteller: " + teller.Status() + "\nlearner: " + teller.learner.Describe() + (flyBody != null ? "\nfly body: " + flyBody.Describe() : "") +
                                  (phase == Phase.Dream ? "\ndream: " + fear.Describe() : "");
         }
 
