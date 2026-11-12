@@ -14,6 +14,7 @@ namespace NightPages
         IEnumerator HauntStills(StringBuilder summary)
         {
             int keepGore = Settings.S.gore;
+            house.Redust();             // the mess stills dusted everything; the words need dust to be written in
             Settings.S.gore = 0;
             int keepDay = day;
             day = 6;
@@ -25,6 +26,7 @@ namespace NightPages
                 if (id == "p:wetbehind") continue;          // happens at your heels as you walk; the bot covers it
                 total++;
                 bool fired = false;
+                haunt.lastView = null;
                 try { fired = haunt.ForceMore(id); }
                 catch (System.Exception e) { Problem("haunts: '" + id + "' threw: " + e.Message); continue; }
                 if (!fired) { Problem("haunts: '" + id + "' couldn't happen in this house"); continue; }
@@ -40,7 +42,8 @@ namespace NightPages
                 from.y = 0f;
                 if (id == "p:drip") from = at + dir * 1.6f;
                 if (id == "p:turned" && room != null && room.door != null) { from = room.door.Middle; from.y = 0f; }
-                if (id == "p:prints") { from = house.hall.center; from.y = 0f; }
+                if (id == "p:prints") { from = house.hall.center; from.y = 0f; at = house.hall.center + Vector3.up * 0.02f + Vis.Flat(house.bedSpawn - house.hall.center).normalized * 0.8f; }
+                if (haunt.lastView != null) from = haunt.lastView.Value;
                 float pitch = Mathf.Clamp(Mathf.Atan2(1.6f - at.y, Vis.Flat(at - from).magnitude) * Mathf.Rad2Deg, -30f, 60f);
                 yield return Pose(from, at, pitch, "haunt " + id.Substring(2));
             }
@@ -95,10 +98,10 @@ namespace NightPages
             }
             else Log("dream puzzles: no dusty table in this maze (no room near the start)");
             var exit = dream.Maze.ExitTransform;
-            Vector3 rc = dream.Maze.RoomCentre(exit.position);
-            Vector3 away = Vis.Flat(rc - exit.position);
-            Vector3 front = rc + (away.sqrMagnitude > 0.01f ? away.normalized : Vector3.back) * 1.3f;
+            // The door stands free in its room facing -z; the locks are either side of it.
+            Vector3 front = exit.position - exit.forward * 2.6f;
             front.y = exit.position.y;
+            Log("dream puzzles: studio: the way out at " + exit.position.ToString("F1") + ", photographed from " + front.ToString("F1") + "; " + exit.childCount + " parts on it");
             yield return Pose(front, exit.position + Vector3.up * 1.3f, 5f, "dream: the way out, locked (clock and dial)");
             int turns = pz.SolveAll();
             if (pz.Locked) Problem("dream puzzles: solving every lock didn't open the way out");
@@ -121,14 +124,14 @@ namespace NightPages
             {
                 t += 1f;
                 var a = fb.Choose(true, true, 4f, false, false, false, reaction, t, null);
-                if (i < 100 && a == FlyBody.Act.Freeze) early++;
+                if (i < 20 && a == FlyBody.Act.Freeze) early += 5;      // its first 20 moments, out of 100
                 if (i >= 500 && a == FlyBody.Act.Freeze) late++;
                 t += 3.1f;
                 fb.Observe(a == FlyBody.Act.Freeze ? 0.7f : 0.1f, t);
                 fb.hunger = 0.3f; fb.nerve = 0.7f;
             }
-            Log("fly body: a pretend player who only jumps when it freezes in view: it froze " + early + " times in its first 100 moments, " + late + " in its last 100");
-            if (late <= early + 10) Problem("fly body: it didn't learn to freeze for a player who only reacts to that (" + early + " -> " + late + ")");
+            Log("fly body: a pretend player who only jumps when it freezes in view: it froze in " + early + "% of its first 20 moments, " + late + " in its last 100");
+            if (late < 80 || late <= early) Problem("fly body: it didn't learn to freeze for a player who only reacts to that (" + early + " -> " + late + ")");
             summary.Append("  \"fly_body\": \"").Append(early).Append(" -> ").Append(late).Append("\",\n");
         }
     }

@@ -77,6 +77,8 @@ namespace NightPages
         public int dripSeconds;
         /// <summary>Studio: where the last of these haunts left its trace.</summary>
         public Vector3 lastTrace;
+        /// <summary>Studio: where to stand to see it (when it's on one face of something).</summary>
+        public Vector3? lastView;
         readonly Dictionary<string, System.Func<bool>> moreActs = new Dictionary<string, System.Func<bool>>();
 
         static bool GoreAllowed { get { return Settings.S.gore < 2; } }
@@ -160,6 +162,17 @@ namespace NightPages
         }
 
         Material Mat(Color c, float smooth = 0.3f) { return Build.Mat(c, 0f, smooth); }
+
+        /// <summary>The face of `t` you see from `from`: where a ray from there meets it, and which way that face looks.</summary>
+        static bool FaceOf(Transform t, Vector3 from, out Vector3 point, out Vector3 normal)
+        {
+            var b = BoundsOf(t);
+            point = b.center; normal = Vector3.forward;
+            foreach (var aim in new[] { b.center, b.center + Vector3.up * b.extents.y * 0.4f, b.center - Vector3.up * b.extents.y * 0.4f })
+                foreach (var h in Physics.RaycastAll(from, (aim - from).normalized, (aim - from).magnitude + 1f, ~0, QueryTriggerInteraction.Ignore))
+                    if (h.transform == t || h.transform.IsChildOf(t)) { point = h.point; normal = h.normal; return true; }
+            return false;
+        }
 
         // ---------------------------------------------------------------- the physical ones
 
@@ -437,24 +450,31 @@ namespace NightPages
             var w = g.house.wardrobe;
             var b = BoundsOf(w);
             var bed = RoomNamed("bedroom");
-            Vector3 dir = Vis.Flat((bed != null ? bed.center : PlayerPos) - b.center).normalized;
-            if (dir.sqrMagnitude < 0.01f) dir = Vector3.forward;
-            float reach = Mathf.Abs(dir.x) * b.extents.x + Mathf.Abs(dir.z) * b.extents.z;
-            Vector3 face = b.center + dir * (reach + 0.003f);
+            Vector3 eye = (bed != null ? bed.center : PlayerPos);
+            eye.y = 1.1f;
+            Vector3 face, dir;
+            if (!FaceOf(w, eye, out face, out dir))
+            {
+                dir = Vis.Flat(eye - b.center).normalized;
+                if (dir.sqrMagnitude < 0.01f) dir = Vector3.forward;
+                face = b.center + dir * (Mathf.Abs(dir.x) * b.extents.x + Mathf.Abs(dir.z) * b.extents.z);
+            }
+            face += dir * 0.003f;
             Vector3 side = Vector3.Cross(Vector3.up, dir);
             int sets = Mathf.Clamp(g.day - 3, 1, 3);
             var works = new List<Work>();
             for (int i = 0; i < sets * 2; i++)
             {
                 Vector3 at = new Vector3(face.x, 0.75f + (i / 2) * 0.16f + Random.Range(-0.04f, 0.04f), face.z) + side * ((i % 2 == 0 ? -0.12f : 0.12f) + Random.Range(-0.05f, 0.05f));
-                var r = Stains.Mark(g.house.transform, at, dir, 0.09f, 0.12f, GoreShown ? "smudge" : "grime", GoreShown ? Liquid.MarkOf("blood") : new Color(0.3f, 0.22f, 0.18f), 1f, Random.Range(-20f, 20f));
+                var r = Stains.Mark(g.house.transform, at, dir, 0.13f, 0.17f, GoreShown ? "smudge" : "grime", GoreShown ? Liquid.MarkOf("blood") : new Color(0.3f, 0.22f, 0.18f), 1f, Random.Range(-20f, 20f));
                 if (r == null) continue;
                 var job = Stains.Cleanable(r, "Scrub", "the handprint", 120f, "sponge", "rag");
                 if (job != null) works.Add(job);
             }
             if (works.Count == 0) return false;
             goreToday = true;
-            lastTrace = face + Vector3.up * 0.9f - face.y * Vector3.up;
+            lastTrace = new Vector3(face.x, 0.95f, face.z);
+            lastView = new Vector3(face.x, 0f, face.z) + Vis.Flat(dir).normalized * 1.3f;
             g.chores.Mess("hands", "Scrub the handprints off the wardrobe (bedroom)",
                 () => { foreach (var x in works) if (x != null && !x.Finished) return false; return true; },
                 () => face, "Small hands. Pressed flat, then dragged. From the inside.");
@@ -467,10 +487,17 @@ namespace NightPages
         {
             var t = g.house.towel;
             var b = BoundsOf(t);
-            Vector3 dir = Vis.Flat(PlayerPos - b.center).normalized;
-            if (dir.sqrMagnitude < 0.01f) dir = Vector3.forward;
-            float reach = Mathf.Abs(dir.x) * b.extents.x + Mathf.Abs(dir.z) * b.extents.z;
-            var r = Stains.Mark(g.house.transform, b.center + dir * (reach + 0.004f), dir, b.size.x + b.size.z, b.size.y * 0.8f, "blot",
+            Vector3 eye = Cam.transform.position;
+            if (g.house.bath != null && g.house.RoomAt(eye) != g.house.bath) { eye = g.house.bath.center; eye.y = 1.5f; }
+            Vector3 face, dir;
+            if (!FaceOf(t, eye, out face, out dir))
+            {
+                dir = Vis.Flat(eye - b.center).normalized;
+                if (dir.sqrMagnitude < 0.01f) dir = Vector3.forward;
+                face = b.center + dir * (Mathf.Abs(dir.x) * b.extents.x + Mathf.Abs(dir.z) * b.extents.z);
+            }
+            lastView = new Vector3(face.x, 0f, face.z) + Vis.Flat(dir).normalized * 1.2f;
+            var r = Stains.Mark(g.house.transform, face + dir * 0.004f, dir, Mathf.Max(b.size.x, b.size.z) * 0.9f, b.size.y * 0.8f, "blot",
                                 GoreShown ? Liquid.MarkOf("blood") : new Color(0.45f, 0.3f, 0.22f), 1f);
             if (r == null) return false;
             var job = Stains.Cleanable(r, "Wash", "the towel", 150f, "sponge", "rag");
