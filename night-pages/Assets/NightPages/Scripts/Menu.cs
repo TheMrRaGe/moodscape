@@ -56,6 +56,8 @@ namespace NightPages
         public readonly List<MenuEntry> items = new List<MenuEntry>();
         public System.Action back;                  // Esc; null: Esc does nothing (the title page)
         public System.Action onShow;
+        /// <summary>A narrow page to one side with little dimming, so the scene behind it shows (the title).</summary>
+        public bool compact;
         public MenuPage Add(MenuEntry i) { items.Add(i); return this; }
     }
 
@@ -253,8 +255,8 @@ namespace NightPages
             var paper = new Color(0.9f, 0.87f, 0.79f, 1f);
             var ink = new Color(0.1f, 0.09f, 0.08f, 1f);
             var faint = new Color(0.1f, 0.09f, 0.08f, 0.45f);
-            Fill(new Rect(0f, 0f, W, H), new Color(0f, 0f, 0f, 0.55f));
-            var r = new Rect(W / 2f - 560f, 50f, 1120f, 980f);
+            Fill(new Rect(0f, 0f, W, H), new Color(0f, 0f, 0f, page.compact ? 0.15f : 0.55f));
+            var r = page.compact ? new Rect(Mathf.Max(40f, W * 0.07f), 110f, 760f, 860f) : new Rect(W / 2f - 560f, 50f, 1120f, 980f);
             Fill(r, paper);
             var oc = GUI.color;
             GUI.color = ink;

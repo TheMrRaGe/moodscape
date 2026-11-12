@@ -126,6 +126,7 @@ namespace NightPages
         }
 
         public Movable carrying;
+        bool sprintOn;
 
         public bool crouched;
 
@@ -408,7 +409,10 @@ namespace NightPages
                 }
                 if (dir.sqrMagnitude > 1f) dir.Normalize();
                 // In VR, walking is a little slower: it is far more comfortable.
-                float speed = (In.Held(Btn.Sprint) ? 4.6f : 2.8f) * speedMul * (vr ? 0.8f : 1f) * (carrying != null && carrying.Heavy ? 0.55f : 1f);
+                // Hurry: held, or (a setting) tapped on and off; stopping ends it.
+                if (Settings.S.toggleSprint) { if (In.Down(Btn.Sprint)) sprintOn = !sprintOn; if (dir.sqrMagnitude < 0.01f) sprintOn = false; }
+                bool hurry = Settings.S.toggleSprint ? sprintOn : In.Held(Btn.Sprint);
+                float speed = (hurry ? 4.6f : 2.8f) * speedMul * (vr ? 0.8f : 1f) * (carrying != null && carrying.Heavy ? 0.55f : 1f);
                 vy = cc.isGrounded ? -1f : vy - 18f * dt;
                 moveWanted = dir * speed;
                 cc.Move((dir * speed + Vector3.up * vy) * dt);

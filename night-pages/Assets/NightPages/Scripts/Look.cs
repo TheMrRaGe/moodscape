@@ -168,10 +168,10 @@ namespace NightPages
             }
             grade.temperature.value = Mathf.Lerp(grade.temperature.value, temp, dt * 1.5f);
             grade.saturation.value = Mathf.Lerp(grade.saturation.value, sat - fear * 25f - k * 30f, dt * 2f);
-            grade.postExposure.value = Mathf.Lerp(grade.postExposure.value, exp - k * 1.2f, dt * 6f);
-            vignette.intensity.value = Mathf.Lerp(vignette.intensity.value, vig + fear * 0.12f + k * 0.2f + Mathf.Sin(t * 2.4f) * fear * 0.03f, dt * 4f);
+            grade.postExposure.value = Mathf.Lerp(grade.postExposure.value, exp + Settings.S.brightness * 0.8f - k * 1.2f, dt * 6f);
+            vignette.intensity.value = Mathf.Lerp(vignette.intensity.value, (Settings.S.vignette ? 1f : 0.35f) * (vig + fear * 0.12f + k * 0.2f + Mathf.Sin(t * 2.4f) * fear * 0.03f), dt * 4f);
             ao.intensity.value = aoI;
-            grain.intensity.value = gr + fear * 0.25f + k * 0.4f;
+            grain.intensity.value = (Settings.S.grain ? 1f : 0f) * (gr + fear * 0.25f) + k * 0.4f;
             ca.intensity.value = 0.06f + fear * 0.12f + k * 0.85f;
             bloom.intensity.value = 1.4f + k * 2f;
         }

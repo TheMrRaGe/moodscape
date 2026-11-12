@@ -62,6 +62,7 @@ namespace NightPages
         public int clues, cluesSpawned, tagFace, tagAway, tagBlame, dreamDeaths;
         public bool cellarOpened;
         public int rungOpen, rungShown;
+        public int[] rungDay = new int[6];
         public Character who = new Character();
         public TaleSave tale = new TaleSave();
         public List<TaleSave> older = new List<TaleSave>();

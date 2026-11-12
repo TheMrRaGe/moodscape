@@ -188,7 +188,9 @@ namespace NightPages
 
             MoveStick = Stick(left);
             Vector2 rs = Stick(right);
-            if (Mathf.Abs(rs.x) > 0.7f && turnArmed) { turnStep = rs.x > 0f ? 30f : -30f; turnArmed = false; }
+            // Comfort setting: snap 30, snap 45, or smooth turning.
+            if (Settings.S.vrTurn == 2) { if (Mathf.Abs(rs.x) > 0.2f) turnStep += rs.x * 110f * Time.deltaTime; }
+            else if (Mathf.Abs(rs.x) > 0.7f && turnArmed) { float a = Settings.S.vrTurn == 1 ? 45f : 30f; turnStep = rs.x > 0f ? a : -a; turnArmed = false; }
             if (Mathf.Abs(rs.x) < 0.3f) turnArmed = true;
 
             // At the typewriter: right stick up and down picks a line, trigger types it.

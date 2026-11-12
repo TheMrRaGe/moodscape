@@ -88,7 +88,7 @@ namespace NightPages
             ClockFace.ShowAll(minutes);
             if (!running || Time.timeScale <= 0f || g == null) return;
             var hud = g.hud;
-            bool stopped = hud == null || hud.modal == Modal.Title || hud.modal == Modal.Ending || hud.modal == Modal.Paused || hud.modal == Modal.Writing;
+            bool stopped = hud == null || hud.modal == Modal.Title || hud.modal == Modal.Ending || hud.modal == Modal.Paused || hud.modal == Modal.Writing || hud.modal == Modal.Menu;
             if (g.phase == Phase.Dream || g.phase == Phase.Title || g.phase == Phase.Ending) stopped = true;
             if (stopped) return;
             minutes += Time.deltaTime * Rate * speed;

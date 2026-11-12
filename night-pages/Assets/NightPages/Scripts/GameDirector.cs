@@ -140,12 +140,12 @@ namespace NightPages
             fear.log = s => Log("fear engine: " + s);
             // The storyteller and its learner (instinct + record), saved beside the fear profile.
             var brain = new FearCore.Learner(FlyWiring.Load());
-            try { if (System.IO.File.Exists(TellerPath)) brain.Load(System.IO.File.ReadAllText(TellerPath)); }
+            try { if (Settings.S.remember && System.IO.File.Exists(TellerPath)) brain.Load(System.IO.File.ReadAllText(TellerPath)); }
             catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't read the storyteller's memory (" + e.Message + "); starting fresh"); }
             teller = new FearCore.Storyteller(brain) { Log = s => Log(s) };
             ApplyDifficulty();
             // What it learned about your habits in earlier runs (weaker now, but it remembers).
-            try { if (System.IO.File.Exists(HabitsPath)) { teller.tactics.Load(System.IO.File.ReadAllText(HabitsPath)); Log("habits: remembered from before: " + Habits.Describe(this)); } }
+            try { if (Settings.S.remember && System.IO.File.Exists(HabitsPath)) { teller.tactics.Load(System.IO.File.ReadAllText(HabitsPath)); Log("habits: remembered from before: " + Habits.Describe(this)); } }
             catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't read habits: " + e.Message); }
             // Walking into doors used to count as slamming them, so every player was remembered as a slammer. Once: forget it.
             try { if (PlayerPrefs.GetInt("np_doorfix", 0) == 0) { teller.tactics.Forget("slams doors"); PlayerPrefs.SetInt("np_doorfix", 1); PlayerPrefs.Save(); Log("habits: forgot 'slams doors' (it was counting walking into doors)"); } }
@@ -185,7 +185,7 @@ namespace NightPages
             Playtest.Attach(this);
 
             chores = new Chores(this);
-            job = Job.Make(JobPref == "random" ? "writer" : JobPref);
+            job = Job.Make(Settings.S.job == "random" ? "writer" : Settings.S.job);
             job.Init(this);
             script = new Manuscript(this);
             script.Reset();
@@ -228,7 +228,7 @@ namespace NightPages
         /// <summary>Keep what the storyteller has learned (every morning, after every dream, on quitting).</summary>
         public void SaveTeller()
         {
-            if (teller == null) return;
+            if (teller == null || !MayRemember) return;
             try { System.IO.File.WriteAllText(TellerPath, teller.learner.Save()); }
             catch (System.Exception e) { Debug.LogWarning("[NightPages] couldn't save the storyteller's memory: " + e.Message); }
             try { System.IO.File.WriteAllText(HabitsPath, teller.tactics.Save()); }
@@ -254,62 +254,9 @@ namespace NightPages
 
         // ---------------------------------------------------------------- flow
 
-        void ShowTitle()
-        {
-            phase = Phase.Title;
-            player.frozen = true;
-            hud.fade = hud.fadeTarget = 1f;
-            hud.header = "NIGHT PAGES";
-            hud.body = "A prototype.\n\nWASD to move, mouse to look, E to use, Shift to hurry. Hold the left mouse button to work with your hands\n(scrub, sweep, turn, pour) and Tab to look at your watch.\nThe dreams learn what unsettles you, and they remember.\n\n" +
-                       "<size=22>F1: see what the game is thinking.  F2: skip ahead.  V: let it listen for gasps (microphone).\n" +
-                       "Hold F / G in a dream to fake a scared / amused reaction.  A VR headset is picked up by itself.</size>";
-            hud.vrBody = "A prototype.\n\nLeft stick to walk, right stick to turn. Point your right hand and pull the trigger to use things.\nGrip to pick things up with either hand. Your watch is on your left wrist.\n" +
-                         "The dreams learn what unsettles you, and they remember.\n\n" +
-                         "<size=50>Left Y: see what the game is thinking.  Keyboard V: let it listen for gasps.</size>";
-            RunDays = PlayerPrefs.GetInt("np_days", 7);
-            if (System.Array.IndexOf(RunLengths, RunDays) < 0) RunDays = 7;
-            titleBody = hud.body;
-            ShowHardcore();
-            hud.Open(Modal.Title);
-        }
-
-        string titleBody;
-
-        /// <summary>The job the title screen is set to ("random" or one of Job.Ids).</summary>
-        static string JobPref { get { return PlayerPrefs.GetString("np_job", "random"); } }
-
         public static string LengthName(int days)
         {
             return days == 3 ? "a weekend (3 days)" : days == 7 ? "a week (7 days)" : days == 14 ? "a fortnight (14 days)" : days == 30 ? "a month (30 days)" : days + " days";
-        }
-
-        void CycleLength()
-        {
-            int i = System.Array.IndexOf(RunLengths, RunDays);
-            RunDays = RunLengths[(i + 1) % RunLengths.Length];
-            PlayerPrefs.SetInt("np_days", RunDays);
-            PlayerPrefs.Save();
-            ShowHardcore();
-            Sfx.Ui("pageturn", 0.5f);
-        }
-
-        void CycleJob()
-        {
-            var order = new List<string> { "random" };
-            order.AddRange(Job.Ids);
-            int i = order.IndexOf(JobPref);
-            PlayerPrefs.SetString("np_job", order[(i + 1) % order.Count]);
-            PlayerPrefs.Save();
-            ShowHardcore();
-            Sfx.Ui("pageturn", 0.5f);
-        }
-
-        void ShowHardcore()
-        {
-            hud.body = titleBody + "\n\n<size=22>Each night's dream is a maze that changes. Get out before the night runs out.\n" +
-                       DifficultyLine + "</size>";
-            hud.footer = "[E]  Begin        [1]  " + DifficultyNames[Level] + "        [2]  You work as: " + (JobPref == "random" ? "(any)" : Job.NameOf(JobPref)) +
-                         "        [3]  Stay: " + LengthName(RunDays);
         }
 
         /// <summary>A page found in the dream: this run's story, and (the first time) how far the way out is.</summary>
@@ -436,17 +383,18 @@ namespace NightPages
             rewriteSeed = rng.Next(3);
             foreach (var n in notes) if (n.go != null) Destroy(n.go);
             notes.Clear();
-            string pick = JobPref == "random" ? Job.Ids[rng.Next(Job.Ids.Length)] : JobPref;
+            string pick = Settings.S.job == "random" ? Job.Ids[rng.Next(Job.Ids.Length)] : Settings.S.job;
             job = Job.Make(pick);
             job.Init(this);
             WireHouse();
             ApplyDifficulty();
             ResetRungs();
-            Log("this run you work as " + job.Name + " (" + (JobPref == "random" ? "drawn at random" : "chosen on the title screen") + ")");
+            Log("this run you work as " + job.Name + " (" + (Settings.S.job == "random" ? "drawn at random" : "chosen when you began") + ")");
             script.Reset();
             hud.mindLines.Clear();
             Log("new run. truth drawn: " + truth + " (60/20/20 odds; the player isn't told)");
             tale = Tale.Tell(truth, rng, fear.brain, s => Log(s), null, 1952, 30, GhostsOnly ? "x-ghost" : null);
+            tale.Meet(hero);
             older.Clear();
             int layers = RunDays >= 30 ? 2 : RunDays >= 14 ? 1 : 0;
             var above = tale;
@@ -454,10 +402,12 @@ namespace NightPages
             {
                 int y = int.Parse(above.Var("year", "1960")) - 25 - rng.Next(30);
                 above = Tale.Tell(truth, rng, fear.brain, s => Log(s), above, y, 1, null);
+                above.Meet(hero);
                 older.Add(above);
             }
             LogBible();
             haunt.SetTale(tale);
+            ApplyLook();
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
             StartCoroutine(BeginDay(1));
@@ -511,6 +461,7 @@ namespace NightPages
             if (calendar == 1) hud.Say(job.Intro, 5f);
             if (calendar > 1 && !string.IsNullOrEmpty(fear.lastLine)) hud.Say("You wake with the dream still in the room.", 3.5f);
             if (LastDay) hud.Say("Your coat is on the hook by the front door. You could just go.", 5f);
+            WriteDiary();
             yield return new WaitForSeconds(0.4f);
             hud.fadeSpeed = 0.8f;
             hud.fadeTarget = 0f;
@@ -842,6 +793,8 @@ namespace NightPages
                 text = "Nobody did anything in this house. That is the worst of it.\n\nYou leave before it can make you stay.";
             }
             PlayerPrefs.SetInt("np_endings", PlayerPrefs.GetInt("np_endings", 0) | (1 << id));
+            PlayerPrefs.SetInt("np_lastending", id);
+            Diary.Burn();
             PlayerPrefs.Save();
             Log("ending: " + title + " (truth " + truth + ", grip " + grip.ToString("0.00") + ", clues " + clues +
                 ", faced " + tagFace + " / looked away " + tagAway + " / blamed " + tagBlame + ")");
@@ -850,7 +803,7 @@ namespace NightPages
             if (!string.IsNullOrEmpty(last)) text += "\n\n<i>" + last + "</i>";
             hud.body = text + "\n\n<size=22>This run's truth: " + truth + ".  Grip " + Mathf.RoundToInt(grip * 100f) + "%.  Clues " + clues +
                        ".  Dreams remembered: " + fear.Dreams + ".</size>";
-            hud.footer = "[R]  Begin again. The dreams will remember you.";
+            hud.footer = "[E]  Back to the title. The dreams will remember you.";
             hud.Open(Modal.Ending);
             busy = false;
         }
@@ -875,31 +828,12 @@ namespace NightPages
                 hud.Say("Microphone: " + Reactions.voice.Status, 3f);
             }
 
-            if (In.Down(Btn.Pause) && (hud.modal == Modal.None || hud.modal == Modal.Paused))
-            {
-                bool pausing = hud.modal == Modal.None;
-                hud.modal = pausing ? Modal.Paused : Modal.None;
-                Time.timeScale = pausing ? 0f : 1f;
-                Cursor.lockState = pausing ? CursorLockMode.None : CursorLockMode.Locked;
-                Cursor.visible = pausing;
-            }
+            if (In.Down(Btn.Pause) && CanPause) OpenPause();
 
             switch (hud.modal)
             {
-                case Modal.Title:
-                    if (!busy && In.Down(Btn.One))
-                    {
-                        Settings.S.difficulty = (Level + 1) % DifficultyNames.Length;
-                        Settings.Save();
-                        ShowHardcore();
-                        Sfx.Ui("pageturn", 0.5f);
-                    }
-                    if (!busy && In.Down(Btn.Two)) CycleJob();
-                    if (!busy && In.Down(Btn.Three)) CycleLength();
-                    if (!busy && In.Down(Btn.Interact)) NewRun();
-                    break;
                 case Modal.Ending:
-                    if (!busy && In.Down(Btn.Restart)) NewRun();
+                    if (!busy && (In.Down(Btn.Restart) || In.Down(Btn.Interact) || In.Down(Btn.Pause))) ShowTitle();
                     break;
                 case Modal.Writing:
                     script.HandleInput();
