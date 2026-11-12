@@ -53,7 +53,47 @@ namespace NightPages
             g = Resources.Load<GameObject>("NPModels/" + id + "/" + id + "_1k");
             if (g == null) { missing.Add(id); return null; }
             cache[id] = g;
+            Surface(g, id);
             return g;
+        }
+
+        /// <summary>Models with their full surface (tools/fetch_pbr.py): normal maps and metal/AO/smoothness.</summary>
+        public static int Surfaced;
+
+        /// <summary>
+        /// Give a model's materials the rest of their surface, if it was downloaded: the normal map, and the packed
+        /// metallic (R), occlusion (G) and smoothness (A) map, found by the colour texture's name.
+        /// </summary>
+        static void Surface(GameObject prefab, string id)
+        {
+            bool any = false;
+            var seen = new HashSet<Material>();
+            foreach (var r in prefab.GetComponentsInChildren<Renderer>(true))
+                foreach (var m in r.sharedMaterials)
+                {
+                    if (m == null || !seen.Add(m) || m.mainTexture == null) continue;
+                    string diff = m.mainTexture.name;
+                    if (!diff.Contains("_diff_")) continue;
+                    var nor = Resources.Load<Texture2D>("NPModels/" + id + "/textures/" + diff.Replace("_diff_", "_nor_gl_"));
+                    var ms = Resources.Load<Texture2D>("NPModels/" + id + "/textures/" + diff.Replace("_diff_", "_ms_"));
+                    if (nor != null && m.HasProperty("_BumpMap"))
+                    {
+                        m.SetTexture("_BumpMap", nor);
+                        m.SetFloat("_BumpScale", 1f);
+                        m.EnableKeyword("_NORMALMAP");
+                        any = true;
+                    }
+                    if (ms != null && m.HasProperty("_MetallicGlossMap"))
+                    {
+                        m.SetTexture("_MetallicGlossMap", ms);
+                        m.EnableKeyword("_METALLICGLOSSMAP");
+                        m.SetFloat("_GlossMapScale", 1f);
+                        m.SetFloat("_SmoothnessTextureChannel", 0f);
+                        if (m.HasProperty("_OcclusionMap")) { m.SetTexture("_OcclusionMap", ms); m.SetFloat("_OcclusionStrength", 0.8f); }
+                        any = true;
+                    }
+                }
+            if (any) Surfaced++;
         }
 
         public static int Installed { get { return cache.Count; } }

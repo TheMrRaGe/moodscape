@@ -16,6 +16,8 @@ namespace NightPages
         public bool active;
         /// <summary>Tonight's lock on the way out and the help the maze offers (see DreamPuzzles).</summary>
         public DreamPuzzles puzzles;
+        /// <summary>Studio: the way out stays put (it would otherwise move once when you get near it).</summary>
+        public void HoldExit() { exitMoved = true; }
 
         class Pending { public Vector3 pos; public System.Func<Vector3, Transform> make; }
 

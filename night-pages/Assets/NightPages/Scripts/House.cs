@@ -501,6 +501,7 @@ namespace NightPages
             BuildKitchen();
             BuildLiving();
             BuildBedroom();
+            BuildEra();
             Plain();
             PorchKit();
             Switches();

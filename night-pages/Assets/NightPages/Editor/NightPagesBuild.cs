@@ -92,15 +92,17 @@ namespace NightPages.EditorTools
                 SetBool(so, "m_FogKeepExp", true);
                 SetBool(so, "m_FogKeepExp2", true);
                 var always = so.FindProperty("m_AlwaysIncludedShaders");
-                var unlit = Shader.Find("Unlit/Texture");
-                if (always != null && unlit != null)
+                // Unlit (the paintings' fallbacks) and the 3D text shader (words in the dust, the dream's dial).
+                foreach (var shaderName in new[] { "Unlit/Texture", "GUI/Text Shader" })
                 {
+                    var sh = Shader.Find(shaderName);
+                    if (always == null || sh == null) continue;
                     bool has = false;
-                    for (int i = 0; i < always.arraySize; i++) if (always.GetArrayElementAtIndex(i).objectReferenceValue == unlit) has = true;
+                    for (int i = 0; i < always.arraySize; i++) if (always.GetArrayElementAtIndex(i).objectReferenceValue == sh) has = true;
                     if (!has)
                     {
                         always.InsertArrayElementAtIndex(always.arraySize);
-                        always.GetArrayElementAtIndex(always.arraySize - 1).objectReferenceValue = unlit;
+                        always.GetArrayElementAtIndex(always.arraySize - 1).objectReferenceValue = sh;
                     }
                 }
                 so.ApplyModifiedPropertiesWithoutUndo();
@@ -136,6 +138,15 @@ namespace NightPages.EditorTools
                 cut.SetOverrideTag("RenderType", "TransparentCutout");
                 cut.renderQueue = 2450;
                 AssetDatabase.CreateAsset(cut, cutPath);
+            }
+            // Models get their normal and metal/smoothness maps at run time (Models.Surface): keep those variants.
+            foreach (var combo in new[] { new[] { "_METALLICGLOSSMAP" }, new[] { "_NORMALMAP", "_METALLICGLOSSMAP" }, new[] { "_NORMALMAP", "_METALLICGLOSSMAP", "_EMISSION" } })
+            {
+                string path = Keep + "/Surface_" + string.Join("_", combo).Replace("_", "") + ".mat";
+                if (AssetDatabase.LoadAssetAtPath<Material>(path) != null) continue;
+                var m = new Material(Shader.Find("Standard"));
+                foreach (var k in combo) m.EnableKeyword(k);
+                AssetDatabase.CreateAsset(m, path);
             }
             AssetDatabase.SaveAssets();
             Debug.Log("[NightPages] project prepared for building");

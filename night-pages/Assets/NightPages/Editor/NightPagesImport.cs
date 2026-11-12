@@ -12,7 +12,9 @@ namespace NightPages.EditorTools
         {
             if (!assetPath.Contains("/NightPages/Resources/")) return;
             var ti = (TextureImporter)assetImporter;
-            if (assetPath.EndsWith("_nor_gl.jpg")) ti.textureType = TextureImporterType.NormalMap;
+            if (assetPath.Contains("_nor_gl")) ti.textureType = TextureImporterType.NormalMap;
+            // Packed metallic / occlusion / smoothness maps are data, not colour.
+            if (assetPath.Contains("_ms_")) ti.sRGBTexture = false;
             ti.maxTextureSize = 1024;
             ti.mipmapEnabled = true;
             ti.anisoLevel = 4;

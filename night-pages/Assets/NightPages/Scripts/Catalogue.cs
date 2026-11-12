@@ -19,18 +19,18 @@ namespace NightPages
 
         static readonly Dictionary<string, string[]> Roles = new Dictionary<string, string[]>
         {
-            { Chair, new[] { "dining_chair_02", "painted_wooden_chair_01", "painted_wooden_chair_02", "gallinera_chair", "GreenChair_01", "SchoolChair_01" } },
+            { Chair, new[] { "WoodenChair_01", "np_dinette_chair", "dining_chair_02", "painted_wooden_chair_01", "painted_wooden_chair_02", "gallinera_chair", "GreenChair_01", "SchoolChair_01" } },
             { Armchair, new[] { "ArmChair_01", "Rockingchair_01", "chinese_armchair", "mid_century_lounge_chair", "Ottoman_01" } },
             { Sofa, new[] { "sofa_03", "Sofa_01", "sofa_02", "painted_wooden_sofa" } },
-            { Table, new[] { "WoodenTable_01", "WoodenTable_03", "wooden_table_02", "painted_wooden_table", "round_wooden_table_01", "round_wooden_table_02", "gallinera_table", "SchoolDesk_01" } },
+            { Table, new[] { "WoodenTable_01", "WoodenTable_03", "wooden_table_02", "painted_wooden_table", "round_wooden_table_01", "round_wooden_table_02", "gallinera_table", "SchoolDesk_01", "dining_table", "np_dinette_table" } },
             { SmallTable, new[] { "CoffeeTable_01", "coffee_table_round_01", "gothic_coffee_table", "chinese_tea_table", "small_wooden_table_01", "side_table_01", "side_table_tall_01", "WoodenTable_02", "ClassicNightstand_01", "painted_wooden_nightstand" } },
             { Cabinet, new[] { "drawer_cabinet", "vintage_wooden_drawer_01", "vintage_cabinet_01", "GothicCommode_01", "painted_wooden_cabinet", "ClassicConsole_01", "metal_tool_chest" } },
             { Tall, new[] { "GothicCabinet_01", "chinese_cabinet", "wooden_display_shelves_01", "Shelf_01", "wooden_bookshelf_worn", "painted_wooden_shelves", "steel_frame_shelves_02" } },
             { Stool, new[] { "painted_wooden_stool", "wooden_stool_01", "folding_wooden_stool", "chinese_stool", "wooden_stool_02" } },
-            { Lamp, new[] { "vintage_oil_lamp", "Lantern_01", "desk_lamp_arm_01", "brass_candleholders", "wooden_candlestick" } },
+            { Lamp, new[] { "np_table_lamp", "wooden_lantern_01", "vintage_oil_lamp", "Lantern_01", "desk_lamp_arm_01", "brass_candleholders", "wooden_candlestick" } },
             { Vase, new[] { "ceramic_vase_01", "ceramic_vase_02", "ceramic_vase_03", "ceramic_vase_04", "antique_ceramic_vase_01", "brass_vase_01", "brass_vase_02", "brass_vase_03", "metal_jug", "jug_01" } },
-            { Decor, new[] { "carved_wooden_elephant", "horse_statue_01", "marble_bust_01", "mantel_clock_01", "standing_picture_frame_01", "standing_picture_frame_02", "brass_goblets", "Camera_01", "vintage_video_camera", "decorative_book_set_01", "vintage_radio_transceiver", "pocket_watch", "magnifying_glass_01", "round_spectacles", "chess_set", "Ukulele_01" } },
-            { Kitchen, new[] { "wooden_bowl_01", "wooden_bowl_02", "pot_enamel_01", "brass_pot_01", "brass_pot_02", "brass_pan_01", "wooden_cutting_board", "jug_01", "tea_set_01", "metal_jug", "can_rusted", "russian_food_cans_01", "CheeseBox_01" } },
+            { Decor, new[] { "carved_wooden_elephant", "horse_statue_01", "marble_bust_01", "mantel_clock_01", "standing_picture_frame_01", "standing_picture_frame_02", "brass_goblets", "Camera_01", "vintage_video_camera", "decorative_book_set_01", "vintage_radio_transceiver", "pocket_watch", "magnifying_glass_01", "round_spectacles", "chess_set", "Ukulele_01", "vintage_pocket_watch", "vintage_binocular", "brass_vase_04", "vintage_microscope", "np_rotary_phone" } },
+            { Kitchen, new[] { "wooden_bowl_01", "wooden_bowl_02", "pot_enamel_01", "brass_pot_01", "brass_pot_02", "brass_pan_01", "wooden_cutting_board", "jug_01", "tea_set_01", "metal_jug", "can_rusted", "russian_food_cans_01", "CheeseBox_01", "np_percolator", "np_toaster", "np_canisters", "ceramic_pot", "wooden_bucket_02" } },
             { Food, new[] { "food_apple_01", "bananas", "lemon", "yellow_onion", "food_pears_asian_01", "food_pomegranate_01", "croissant", "carrot_cake" } },
             { Clutter, new[] { "cardboard_box_01", "wicker_basket_01", "wicker_basket_02", "vintage_suitcase", "wooden_crate_01", "planter_pot_clay", "bleach_bottle", "all_purpose_cleaner", "multi_cleaner_bottle", "plastic_bottle_gallon", "cleaner_tin_01", "seeding_tray_01", "rubber_boots" } },
             { Plant, new[] { "potted_plant_01", "potted_plant_02", "potted_plant_04", "planter_pot_clay" } },
@@ -50,6 +50,9 @@ namespace NightPages
         static readonly HashSet<string> DreamOnly = new HashSet<string>
         {
             "SchoolChair_01", "SchoolDesk_01", "metal_tool_chest", "mid_century_lounge_chair", "BarberShopChair_01", "steel_frame_shelves_02", "GreenChair_01",
+            // Not an American farmhouse of the 50s to 70s (the era pass): only the dream borrows them.
+            "chinese_armchair", "chinese_tea_table", "chinese_stool", "chinese_cabinet", "chinese_screen_panels", "GothicCommode_01", "GothicCabinet_01",
+            "GothicBed_01", "gothic_coffee_table", "lion_head", "bull_head", "WetFloorSign_01", "standing_chalkboard_01", "scandinavian_masonry_heater",
         };
 
         static readonly Dictionary<string, string> roleOf = new Dictionary<string, string>();

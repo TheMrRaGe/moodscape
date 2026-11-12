@@ -17,8 +17,10 @@
 /Tests/fear-sim/bin/
 /Tests/fear-sim/obj/
 /Tests/fear-sim/fear-sim-data/
-# downloaded CC0 models: fetched by tools/fetch_models.py, not stored in git
-/Assets/NightPages/Resources/NPModels/
+# downloaded CC0 models: fetched by tools/fetch_assets.py and tools/fetch_pbr.py, not stored in git;
+# our own (np_*, built by tools/blender/np_build_models.py) are kept
+/Assets/NightPages/Resources/NPModels/*
+!/Assets/NightPages/Resources/NPModels/np_*/
 /Assets/NightPages/Resources/NPModels.meta
 __pycache__/
 # headless test runs and the Unity agent's working files

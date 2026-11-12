@@ -142,6 +142,9 @@ namespace NightPages
         static Bounds BoundsOf(Transform t)
         {
             var rs = t.GetComponentsInChildren<Renderer>();
+            var col = t.GetComponent<Collider>();
+            // Furniture made from a model is a box collider standing in for it, with the model beside it: use the box.
+            if (rs.Length == 0 && col != null) return col.bounds;
             var b = rs.Length > 0 ? rs[0].bounds : new Bounds(t.position, Vector3.one * 0.1f);
             foreach (var r in rs) b.Encapsulate(r.bounds);
             return b;

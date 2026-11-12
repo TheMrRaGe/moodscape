@@ -50,6 +50,15 @@ food_pomegranate_01 can_rusted all_purpose_cleaner bleach_bottle multi_cleaner_b
 vintage_video_camera horse_statue_01 metal_tool_chest steel_frame_shelves_02 barrel_03 Barrel_01 BarberShopChair_01
 SchoolChair_01 SchoolDesk_01 ceiling_fan mid_century_lounge_chair WetFloorSign_01 plastic_bottle_gallon
 russian_food_cans_01 seeding_tray_01 cleaner_tin_01
+# (era pass: the rest of a 1950s-70s farmhouse, the shed's insides, the attic and the cellar)
+television_02 WoodenChair_01 dining_table Chandelier_02 pull_chain_light_socket vintage_pocket_watch wooden_bucket_02
+ceramic_pot vintage_binocular treasure_chest wooden_lantern_01 vintage_microscope brass_vase_04 hand_plane_no4
+vintage_hand_drill bench_vice_01 crowbar_01 handsaw_wood sledgehammer_01 trowel_01 tire_pump wooden_hammer_01
+small_oil_can_01 measuring_tape_01 ladder_sectioned_01 compost_bags planter_box_02 planter_box_03 steel_frame_shelves_01
+metal_toolbox gate_latch_01 garden_sprinkler_01 oil_tin leather_cleaner_can Barrel_02 cement_bag rusted_hacksaw pliers
+screwdriver old_gas_mask wooden_military_crate old_military_crate medical_box cigarette_case wooden_ladder_02 plunger
+drain_cleaner metal_stool_01 metal_jerrycan picke_dirty_01 wooden_axe_02 power_box_01 caged_hanging_light worn_metal_rack
+old_drill_press
 """.split()
 
 TEXTURES = """

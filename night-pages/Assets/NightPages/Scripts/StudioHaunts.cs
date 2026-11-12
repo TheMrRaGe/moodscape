@@ -85,6 +85,7 @@ namespace NightPages
             phase = Phase.Dream;
             dream.Begin(6);
             yield return Settle(1.0f);
+            dream.HoldExit();
             var pz = dream.puzzles;
             if (pz == null) { Problem("dream puzzles: none made"); yield break; }
             pz.Tick(Time.time, player.transform.position);
@@ -138,6 +139,43 @@ namespace NightPages
         {
             yield return voice.StudioCheck(Problem);
             summary.Append("  \"voice\": \"").Append(voice.Ready ? (voice.answered > 0 ? "answered" : "no answer") : "no key").Append("\",\n");
+        }
+            /// <summary>
+        /// Studio: every room from its doorway (how the era pass dressed it), then a close look at each of our own
+        /// models wherever the generator put them.
+        /// </summary>
+        IEnumerator RoomStills(StringBuilder summary)
+        {
+            house.SetHour(10.5f, 1);
+            foreach (var r in house.rooms) r.lit = true;
+            foreach (var r in house.rooms)
+            {
+                if (r == house.hall) continue;
+                Vector3 door = r.door != null ? r.door.Middle : r.center + Vector3.back * 3f;
+                Vector3 into = Vis.Flat(r.center - door).normalized;
+                Vector3 from = door + into * 0.45f;
+                from.y = 0f;
+                yield return Pose(from, r.center + Vector3.up * 0.7f - into * 0.2f, -8f, "room: " + r.name);
+            }
+            int close = 0;
+            foreach (Transform t in house.transform)
+            {
+                if (!t.name.StartsWith("np_")) continue;
+                var rs = t.GetComponentsInChildren<Renderer>();
+                if (rs.Length == 0) continue;
+                var b = rs[0].bounds;
+                foreach (var rr in rs) b.Encapsulate(rr.bounds);
+                var room = house.RoomAt(b.center);
+                Vector3 dir = Vis.Flat((room != null ? room.center : b.center + Vector3.back) - b.center);
+                dir = dir.sqrMagnitude > 0.01f ? dir.normalized : Vector3.back;
+                float dist = Mathf.Clamp(b.size.magnitude * 1.6f, 0.7f, 2.4f);
+                Vector3 from = b.center + dir * dist;
+                from.y = 0f;
+                yield return Pose(from, b.center, Mathf.Clamp(Mathf.Atan2(1.6f - b.center.y, dist) * Mathf.Rad2Deg, -10f, 55f), "close: " + t.name + (room != null ? " (" + room.name + ")" : ""));
+                close++;
+            }
+            Log("rooms: photographed every room and " + close + " of our own models where they were put; era pass placed " + house.eraPlaced);
+            summary.Append("  \"era_pieces\": ").Append(house.eraPlaced).Append(",\n");
         }
     }
 }
