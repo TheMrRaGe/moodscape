@@ -42,6 +42,7 @@ namespace NightPages
         public string banned = "";
         // ---- senses and privacy
         public bool remember = true;
+        public bool voice = true;              // the AI voice writes some of the house's words (needs a key; see StoryVoice)
         // ---- the game
         public int dayLength = 1;              // 0: 24 min, 1: 32 min, 2: 48 min
         public bool choreHints = true;

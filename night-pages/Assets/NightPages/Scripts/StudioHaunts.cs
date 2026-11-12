@@ -134,5 +134,10 @@ namespace NightPages
             if (late < 80 || late <= early) Problem("fly body: it didn't learn to freeze for a player who only reacts to that (" + early + " -> " + late + ")");
             summary.Append("  \"fly_body\": \"").Append(early).Append(" -> ").Append(late).Append("\",\n");
         }
+            IEnumerator VoiceCheck(StringBuilder summary)
+        {
+            yield return voice.StudioCheck(Problem);
+            summary.Append("  \"voice\": \"").Append(voice.Ready ? (voice.answered > 0 ? "answered" : "no answer") : "no key").Append("\",\n");
+        }
     }
 }

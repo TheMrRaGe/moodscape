@@ -44,6 +44,7 @@ namespace NightPages
                 hud.fade = hud.fadeTarget = 0f;
                 yield return MenuChecks(summary);
                 FlyBodyCheck(summary);
+                yield return VoiceCheck(summary);
                 yield return ClueChecks(summary);
                 if (StudioCensus) yield return StoryCensus(summary);
                 if (StudioMess) yield return MessStills(summary);

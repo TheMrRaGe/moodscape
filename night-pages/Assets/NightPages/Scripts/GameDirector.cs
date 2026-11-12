@@ -77,6 +77,8 @@ namespace NightPages
         public FearCore.Storyteller teller;
         /// <summary>The fly-brain body that moves the dream's monster (learns which ways of moving frighten you).</summary>
         public FlyBody flyBody;
+        /// <summary>The AI voice (StoryVoice): some notes, dream pages and waking lines written by a language model.</summary>
+        public StoryVoice voice;
         public Hallucinations halluc;
         public Uncanny uncanny;
         public Nights nights;
@@ -135,6 +137,8 @@ namespace NightPages
             Settings.Apply();
             Sfx.Init();
             hud = gameObject.AddComponent<Hud>();
+            voice = gameObject.AddComponent<StoryVoice>();
+            voice.Init(this);
             link = gameObject.AddComponent<MoodscapeLink>();
             fear = new FearEngine();
             fear.log = s => Log("fear engine: " + s);
@@ -222,6 +226,7 @@ namespace NightPages
             Debug.Log("[NightPages] " + line);
             Tour.Note(line);
             if (Playtest.I != null) Playtest.I.Note(line);
+            if (voice != null) voice.Heard(line);
             if (hud != null) hud.Log(line);
         }
 
@@ -399,6 +404,7 @@ namespace NightPages
             Log("new run. truth drawn: " + truth + " (60/20/20 odds; the player isn't told)");
             tale = Tale.Tell(truth, rng, fear.brain, s => Log(s), null, 1952, 30, GhostsOnly ? "x-ghost" : null);
             tale.Meet(hero);
+            voice.NewRun();
             older.Clear();
             int layers = RunDays >= 30 ? 2 : RunDays >= 14 ? 1 : 0;
             var above = tale;
@@ -459,13 +465,16 @@ namespace NightPages
             uncanny.BeginDay(day);
             dreamRetry = false;
             ConsiderRung();
+            voice.AskForDay(cal, d);
             haunt.BeginDay(day);
             house.Wear(day);
             SaveTeller();
             RefreshObjectives();
             hud.Say(LastDay ? "Day " + calendar + ". The last one." : "Day " + calendar + (RunDays != Days ? " of " + RunDays : ""), 3f);
             if (calendar == 1) hud.Say(job.Intro, 5f);
-            if (calendar > 1 && !string.IsNullOrEmpty(fear.lastLine)) hud.Say("You wake with the dream still in the room.", 3.5f);
+            string woke = voice.Waking(calendar);
+            if (woke != null) hud.Say(woke, 4f);
+            else if (calendar > 1 && !string.IsNullOrEmpty(fear.lastLine)) hud.Say("You wake with the dream still in the room.", 3.5f);
             if (LastDay) hud.Say("Your coat is on the hook by the front door. You could just go.", 5f);
             UpdateBoard();
             WriteDiary();
@@ -712,6 +721,17 @@ namespace NightPages
         {
             // Today's note: the story's own (the truth's papers are hidden in the house instead: see Clues.cs).
             var all = tale != null ? tale.Clues() : new List<string>();
+            // The voice's note for this evening, if it wrote one: left as well as the story's own.
+            string said = voice.Note(calendar);
+            if (said != null && day >= 2)
+            {
+                var vr = house.rooms[rng.Next(house.rooms.Count)];
+                var vn = new Note { text = said };
+                vn.go = Build.Box("Note", house.transform, vr.notePoint + new Vector3(0.12f, 0f, 0.1f), new Vector3(0.22f, 0.02f, 0.3f), new Color(0.93f, 0.9f, 0.82f), true, 0.6f);
+                Build.Usable(vn.go, "Read what's been left here").use = () => ReadNote(vn);
+                notes.Add(vn);
+                Log("voice: its note for this evening is in the " + vr.name);
+            }
             // The older stories' notes come after this one's (they surface once this story is under way).
             foreach (var o in older) all.AddRange(o.Clues());
             if (day < 2 || cluesSpawned >= all.Count) return;

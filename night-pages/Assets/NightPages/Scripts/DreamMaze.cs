@@ -1340,6 +1340,9 @@ namespace NightPages
         public static List<string> Pages(GameDirector g, int day, System.Random rng)
         {
             var pages = new List<string>();
+            // Tonight's page from the voice, if it wrote one, first.
+            string voiced = g.voice != null ? g.voice.Page(g.calendar) : null;
+            if (voiced != null) pages.Add(voiced);
             string fearKind = Safe(() => g.fear.TopFamily(), "the dark");
             string look = Safe(() => g.fear.DescribeLook(g.fear.Look()), "tall and thin").ToLowerInvariant();
             string first = look.Split(',')[0].Trim();
