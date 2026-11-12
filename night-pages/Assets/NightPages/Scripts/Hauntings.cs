@@ -81,6 +81,7 @@ namespace NightPages
                 g.Log("haunting: the music box, and nothing after it (" + d.Describe() + ")");
                 return true;
             };
+            InitGrammar();
         }
 
         FearCore.Incident Add(string id, string label, int tier, float cost, int minDay, System.Func<bool> act, params string[] tags)
@@ -99,6 +100,7 @@ namespace NightPages
             ClearTransient();
             teller.BeginEpisode(day, Time.time);
             BeginDayMore();
+            BeginDayGrammar(day);
             Bleed(day);
         }
 
@@ -174,6 +176,7 @@ namespace NightPages
             teller.Tick(now, Mathf.Clamp01(Reactions.Level), watching);
             TickLadder(now);
             TickMore(now);
+            TickGrammar();
 
             // The monster's leash: while it is in the house and close, the gauge fills.
             float dist = figure != null ? (figure.position - PlayerPos).magnitude : float.PositiveInfinity;

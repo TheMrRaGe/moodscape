@@ -379,7 +379,7 @@ namespace NightPages
 
         /// <summary>After Forget me, nothing more is written about you until the game restarts.</summary>
         bool forgotten;
-        bool MayRemember { get { return Settings.S.remember && !forgotten; } }
+        public bool MayRemember { get { return Settings.S.remember && !forgotten; } }
 
         MenuPage GamePage()
         {

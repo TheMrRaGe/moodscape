@@ -45,6 +45,27 @@ namespace NightPages
                 yield return Pose(from, at, pitch, "haunt " + id.Substring(2));
             }
             Log("haunts: " + ok + " of " + total + " physical and gore haunts happened and were photographed");
+            // The grammar's inventions: the first few in the pool, done now and photographed.
+            int inv = 0;
+            for (int i = 0; i < Mathf.Min(5, haunt.GrammarCount); i++)
+            {
+                string what;
+                bool did = false;
+                try { did = haunt.ForceGene(i, out what); }
+                catch (System.Exception e) { Problem("haunt grammar: invention " + i + " threw: " + e.Message); continue; }
+                if (!did) { Log("haunt grammar: studio: nothing to do invention " + i + " to (" + what + ")"); continue; }
+                inv++;
+                yield return Settle(1.0f);
+                Vector3 at = haunt.lastTrace;
+                var room = house.RoomAt(at);
+                Vector3 from = room != null && room.door != null ? room.door.Middle : at + Vector3.back * 2f;
+                from.y = 0f;
+                if (Vis.Flat(from - at).magnitude < 1.2f) from = at + Vis.Flat(from - at).normalized * 1.8f;
+                yield return Pose(from, at, Mathf.Clamp(Mathf.Atan2(1.6f - at.y, Vis.Flat(at - from).magnitude) * Mathf.Rad2Deg, -20f, 50f), "invented: " + what);
+            }
+            if (haunt.GrammarCount < 8) Problem("haunt grammar: only " + haunt.GrammarCount + " invented haunts in the pool");
+            Log("haunt grammar: studio did " + inv + " inventions");
+            summary.Append("  \"inventions\": ").Append(inv).Append(",\n");
             summary.Append("  \"haunts\": \"").Append(ok).Append("/").Append(total).Append("\",\n");
             Settings.S.gore = keepGore;
             day = keepDay;
