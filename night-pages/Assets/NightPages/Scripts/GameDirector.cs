@@ -441,7 +441,7 @@ namespace NightPages
             job.Init(this);
             WireHouse();
             ApplyDifficulty();
-            rungOpen = 0; rungShown = 0;
+            ResetRungs();
             Log("this run you work as " + job.Name + " (" + (JobPref == "random" ? "drawn at random" : "chosen on the title screen") + ")");
             script.Reset();
             hud.mindLines.Clear();

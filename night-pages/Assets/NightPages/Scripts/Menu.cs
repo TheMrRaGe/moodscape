@@ -4,7 +4,7 @@ using UnityEngine;
 namespace NightPages
 {
     /// <summary>One line on a menu page: something to do, a setting to step through, a name to type, or a heading.</summary>
-    public class MenuItem
+    public class MenuEntry
     {
         public string label;
         public System.Func<string> value;           // shown on the right (a setting's current value)
@@ -20,30 +20,30 @@ namespace NightPages
         public bool Selectable { get { return !heading && (enabled == null || enabled()); } }
         public bool IsText { get { return getText != null; } }
 
-        public static MenuItem Act(string label, System.Action a, string hint = null) { return new MenuItem { label = label, activate = a, hint = hint }; }
-        public static MenuItem Head(string label) { return new MenuItem { label = label, heading = true }; }
-        public static MenuItem Text(string label, System.Func<string> get, System.Action<string> set, int max = 20, string hint = null)
-        { return new MenuItem { label = label, getText = get, setText = set, maxLen = max, hint = hint }; }
+        public static MenuEntry Act(string label, System.Action a, string hint = null) { return new MenuEntry { label = label, activate = a, hint = hint }; }
+        public static MenuEntry Head(string label) { return new MenuEntry { label = label, heading = true }; }
+        public static MenuEntry Text(string label, System.Func<string> get, System.Action<string> set, int max = 20, string hint = null)
+        { return new MenuEntry { label = label, getText = get, setText = set, maxLen = max, hint = hint }; }
 
         /// <summary>A setting with a list of choices, stepped with left/right (or clicked to go to the next).</summary>
-        public static MenuItem Choice(string label, string[] names, System.Func<int> get, System.Action<int> set, string hint = null)
+        public static MenuEntry Choice(string label, string[] names, System.Func<int> get, System.Action<int> set, string hint = null)
         {
-            var it = new MenuItem { label = label, hint = hint };
+            var it = new MenuEntry { label = label, hint = hint };
             it.value = () => names[Mathf.Clamp(get(), 0, names.Length - 1)];
             it.step = d => set(((get() + d) % names.Length + names.Length) % names.Length);
             it.activate = () => it.step(1);
             return it;
         }
 
-        public static MenuItem Toggle(string label, System.Func<bool> get, System.Action<bool> set, string hint = null)
+        public static MenuEntry Toggle(string label, System.Func<bool> get, System.Action<bool> set, string hint = null)
         {
             return Choice(label, new[] { "off", "on" }, () => get() ? 1 : 0, i => set(i == 1), hint);
         }
 
         /// <summary>A number stepped by `inc` between min and max, shown with `fmt` (e.g. "{0:0}%").</summary>
-        public static MenuItem Slider(string label, float min, float max, float inc, System.Func<float> get, System.Action<float> set, System.Func<float, string> show, string hint = null)
+        public static MenuEntry Slider(string label, float min, float max, float inc, System.Func<float> get, System.Action<float> set, System.Func<float, string> show, string hint = null)
         {
-            var it = new MenuItem { label = label, hint = hint };
+            var it = new MenuEntry { label = label, hint = hint };
             it.value = () => show(get());
             it.step = d => set(Mathf.Clamp(Mathf.Round((get() + d * inc) / inc) * inc, min, max));
             return it;
@@ -53,10 +53,10 @@ namespace NightPages
     public class MenuPage
     {
         public string title, intro, footer;
-        public readonly List<MenuItem> items = new List<MenuItem>();
+        public readonly List<MenuEntry> items = new List<MenuEntry>();
         public System.Action back;                  // Esc; null: Esc does nothing (the title page)
         public System.Action onShow;
-        public MenuPage Add(MenuItem i) { items.Add(i); return this; }
+        public MenuPage Add(MenuEntry i) { items.Add(i); return this; }
     }
 
     /// <summary>

@@ -72,6 +72,12 @@ namespace NightPages
         public static readonly string[] RungNames = { "traces", "a glimpse", "a sighting", "in the room with you", "stalking", "it reaches you" };
         /// <summary>The highest rung opened this run, and the highest the player has actually seen.</summary>
         public int rungOpen, rungShown;
+        /// <summary>The real day each rung opened (0: not yet).</summary>
+        public int[] rungDay = new int[6];
+        int waivedLogged = -1;
+
+        /// <summary>A new run: back to traces.</summary>
+        public void ResetRungs() { rungOpen = rungShown = 0; rungDay = new int[6]; rungDay[0] = 1; waivedLogged = -1; }
         public int Rung { get { return rungOpen; } }
 
         /// <summary>The rung this day opens by schedule alone.</summary>
@@ -102,12 +108,27 @@ namespace NightPages
             if (s <= rungOpen) { Log("the figure: rung " + rungOpen + " (" + RungNames[rungOpen] + ") is as far as it has come; seen up to " + rungShown); return; }
             int was = rungOpen;
             rungOpen = s;
+            for (int k = was + 1; k <= s; k++) rungDay[k] = calendar;
             Log("the figure: rung " + rungOpen + " (" + RungNames[rungOpen] + ") opens today by the calendar (" + DifficultyNames[Level] + ", day " + calendar + " of " + RunDays +
                 ", story day " + day + "; was " + was + "). It still has to be seen at each rung below first (seen up to " + rungShown + ")");
         }
 
-        /// <summary>Can a rung's haunting happen now? Open, and the one below it has been seen.</summary>
-        public bool RungOk(int k) { return rungOpen >= k && rungShown >= k - 1; }
+        /// <summary>
+        /// Can a rung's haunting happen now? Open, and the one below it has been seen, or the one below has had a
+        /// whole earlier day to be seen and wasn't (the player never looked; it doesn't wait for ever).
+        /// </summary>
+        public bool RungOk(int k)
+        {
+            if (rungOpen < k) return false;
+            if (rungShown >= k - 1) return true;
+            int below = rungDay[k - 1];
+            if (below > 0 && below < calendar)
+            {
+                if (waivedLogged < k) { waivedLogged = k; Log("the figure: rung " + (k - 1) + " (" + RungNames[k - 1] + ") was open since day " + below + " and never seen, so rung " + k + " doesn't wait for it"); }
+                return true;
+            }
+            return false;
+        }
 
         /// <summary>The player has seen the figure at this rung.</summary>
         public void RungSeen(int k, string what)
@@ -123,6 +144,7 @@ namespace NightPages
             int cap = Mathf.Min(4, RungScheduled + 1);
             if (rungOpen >= cap || rungShown < rungOpen) return;
             rungOpen++;
+            rungDay[rungOpen] = calendar;
             Log("the figure: rung " + rungOpen + " (" + RungNames[rungOpen] + ") opens early: " + why);
         }
 
