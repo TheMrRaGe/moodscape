@@ -47,6 +47,8 @@ namespace NightPages
                 if (StudioCensus) yield return StoryCensus(summary);
                 if (StudioMess) yield return MessStills(summary);
                 else yield return HouseStills(summary);
+                yield return HauntStills(summary);
+                yield return DreamPuzzleStills(summary);
                 yield break;
             }
             BuildStudio();

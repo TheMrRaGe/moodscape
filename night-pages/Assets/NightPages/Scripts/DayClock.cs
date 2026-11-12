@@ -107,6 +107,8 @@ namespace NightPages
         {
             if (g.house == null || g.house.hallClock == null || !g.house.clockWound) return;
             int n = hour % 12 == 0 ? 12 : hour % 12;
+            // From day 2, at bedtime, it strikes the hour it happened instead (the dream's clock asks for it).
+            if (hour >= 21 && g.day >= 2) { n = g.DeathHour; g.Log("house: the hall clock struck " + n + " at " + hour + ":00"); }
             g.StartCoroutine(Bongs(n, g.house.hallClock.position + Vector3.up * 1.6f));
         }
 

@@ -1045,6 +1045,10 @@ namespace NightPages
                                 else if (!busy && dream.Maze != null && hud.modal == Modal.None)
                                 {
                                     Vector3 goal = dream.Maze.Guide(player.transform.position);
+                                    // Locked tonight: the bot works the lock when it reaches the door (as a player would).
+                                    if (dream.puzzles != null && dream.puzzles.Locked && dream.Maze.RoomsToExit(player.transform.position) == 0 &&
+                                        Vis.Level(dream.Maze.ExitPosition - player.transform.position).magnitude < 3f)
+                                        Log("bot: worked the lock on the way out in " + dream.puzzles.SolveAll() + " turns");
                                     // A wave: make for the nearest hiding place (this room or next door) and get in.
                                     var hide = hunted ? dream.Maze.NearestHide(player.transform.position, 1) : null;
                                     if (hunted && Time.time > botNote)

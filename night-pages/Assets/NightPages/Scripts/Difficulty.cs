@@ -38,6 +38,9 @@ namespace NightPages
             }
         }
 
+        /// <summary>The hour it happened: the hall clock strikes it at bedtime from day 2, and the dream's clock lock asks for it.</summary>
+        public int DeathHour { get { return 1 + ((House.BuiltSeed % 12) + 12) % 12; } }
+
         /// <summary>Set on a dream dreamt again after losing it (hard gives that night less time).</summary>
         [System.NonSerialized] public bool dreamRetry;
 

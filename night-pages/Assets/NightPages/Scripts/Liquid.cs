@@ -29,6 +29,7 @@ namespace NightPages
                 case "dishwater": return new Color(0.55f, 0.52f, 0.45f);
                 case "pond water": return new Color(0.3f, 0.34f, 0.2f);
                 case "whisky": return new Color(0.6f, 0.38f, 0.12f);
+                case "blood": return new Color(0.32f, 0.02f, 0.03f);
                 default: return new Color(0.55f, 0.57f, 0.6f);          // water: shows only as a darkening and a shine
             }
         }
@@ -181,24 +182,30 @@ namespace NightPages
             if (solesLeft <= 0) solesKind = null;
         }
 
-        static void Print(Vector3 feet, Vector3 forward, bool left, string kind, float strength)
+        /// <summary>A footprint laid by something other than your own feet (a haunting). Returns its cleaning job (null for water, which dries).</summary>
+        public static Work PrintAt(Vector3 feet, Vector3 forward, bool left, string kind, float strength) { return Print(feet, forward, left, kind, strength, false); }
+
+        static void Print(Vector3 feet, Vector3 forward, bool left, string kind, float strength) { Print(feet, forward, left, kind, strength, true); }
+
+        static Work Print(Vector3 feet, Vector3 forward, bool left, string kind, float strength, bool yours)
         {
             Vector3 hp, hn; Transform hon;
-            if (!Below(feet + Vector3.up * 0.3f + Vis.Flat(forward).normalized * 0.05f, out hp, out hn, out hon) || hn.y < 0.8f || hp.y < feet.y - 0.3f) return;
+            if (!Below(feet + Vector3.up * 0.3f + Vis.Flat(forward).normalized * 0.05f, out hp, out hn, out hon) || hn.y < 0.8f || hp.y < feet.y - 0.3f) return null;
             var hit = new { point = hp, normal = hn };
             Vector3 side = Vector3.Cross(Vector3.up, Vis.Flat(forward).normalized) * (left ? -0.09f : 0.09f);
             float yaw = Vector3.SignedAngle(Vector3.forward, Vis.Flat(forward), Vector3.up);
             var holder = GameDirector.I != null && GameDirector.I.house != null ? GameDirector.I.house.transform : null;
             var r = NightPages.Stains.Mark(holder, hit.point + side, Vector3.up, 0.1f, 0.27f, "shoe", MarkOf(kind), strength * (kind == "water" ? 0.6f : 0.9f), -yaw + (left ? 4f : -4f), left ? 0 : 1);
-            if (r == null) return;
+            if (r == null) return null;
             prints++;
             if (kind == "water")
             {
-                // Water prints dry where you made them.
+                // Water prints dry where they were made.
                 r.gameObject.AddComponent<Dry>().Begin(r, 45f + Random.value * 30f);
-                return;
+                return null;
             }
-            var w = NightPages.Stains.Cleanable(r, "Wipe", "the " + kind + "y footprint", 90f, "rag", "sponge", "mop");
+            var w = NightPages.Stains.Cleanable(r, "Wipe", "the " + (kind == "mud" ? "muddy" : kind + "-stained") + " footprint", 90f, "rag", "sponge", "mop");
+            if (!yours) return w;
             if (kind == "mud" && !muddyChore && GameDirector.I != null && GameDirector.I.chores != null)
             {
                 muddyChore = true;
@@ -210,6 +217,7 @@ namespace NightPages
                     "Your own footprints, every one. You count them as you go, and lose count.");
             }
             if (kind == "mud" && trail != null) trail.Add(w);
+            return w;
         }
         static List<Work> trail;
 

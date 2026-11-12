@@ -495,6 +495,7 @@ namespace NightPages
 
         public int RoomsToExit(Vector3 pos) { return Distance(CellAt(pos), exitCell); }
         public Vector3 ExitPosition { get { return exit.position; } }
+        public Transform ExitTransform { get { return exit; } }
 
         /// <summary>A place on the floor of some room between min and max metres from `from`.</summary>
         public Vector3 RandomPoint(Vector3 from, float min, float max, bool preferUnseen, Camera cam)

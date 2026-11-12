@@ -14,6 +14,8 @@ namespace NightPages
     {
         public static readonly Vector3 Origin = new Vector3(0f, -300f, 0f);
         public bool active;
+        /// <summary>Tonight's lock on the way out and the help the maze offers (see DreamPuzzles).</summary>
+        public DreamPuzzles puzzles;
 
         class Pending { public Vector3 pos; public System.Func<Vector3, Transform> make; }
 
@@ -139,6 +141,7 @@ namespace NightPages
             hx = hz = 400f; ceil = DreamMaze.H; roofed = true;
             int size = day <= 2 ? 4 : day <= 4 ? 5 : 6;
             maze = new DreamMaze(g, root, size, day, Random.Range(1, 1000000), paintMat);
+            puzzles = new DreamPuzzles(g, maze, root, day);
             maze.onBattery = () => { Battery = Mathf.Min(1f, Battery + 0.45f); batteriesFound++; Sfx.Ui("click", 0.7f, 1.3f); g.hud.Say("Batteries. " + Mathf.RoundToInt(Battery * 100f) + "%.", 2f); };
             if (torch == null)
             {
@@ -187,6 +190,7 @@ namespace NightPages
             if (torch != null) torch.enabled = false;
             if (maze != null) maze.Destroy();
             maze = null;
+            puzzles = null;
             g.fear.onApply = null;
             g.fear.canChange = null;
             monster = null;
@@ -680,6 +684,7 @@ namespace NightPages
             // The dream's own haunts: more of them, sooner, while it is toying with you.
             bool toying = stalker != null && (stalker.state == MazeStalker.State.Toy || stalker.state == MazeStalker.State.Search);
             maze.TickHaunts(pp, Cam, Mathf.Clamp01(left / nightLength), toying, stalker != null && stalker.Hidden != null);
+            if (puzzles != null) puzzles.Tick(now, pp);
             float d = (maze.ExitPosition - pp).magnitude;
             if (day >= 3 && !exitMoved && d < 5.5f && maze.RoomsToExit(pp) == 0 && left > 35f)
             {
@@ -690,6 +695,7 @@ namespace NightPages
                     g.hud.Say("Not that one.", 3f);
                 }
             }
+            else if (d < 1.5f && puzzles != null && puzzles.Locked) puzzles.AtLockedDoor(now);
             else if (d < 1.5f)
             {
                 g.Steady(0.03f, "got out of the dream with " + Mathf.Max(0f, left).ToString("0") + " s of night left");

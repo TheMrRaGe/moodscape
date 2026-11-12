@@ -64,6 +64,7 @@ namespace NightPages
             // The grounded ones: what people really report, done the way they report it (see HauntingsGrounded).
             InitGrounded();
             InitLadder();
+            InitMore();
 
             // Where you hide gets the worst of it, once the house has learned where that is.
             teller.Bias = i =>
@@ -97,6 +98,7 @@ namespace NightPages
         {
             ClearTransient();
             teller.BeginEpisode(day, Time.time);
+            BeginDayMore();
             Bleed(day);
         }
 
@@ -171,6 +173,7 @@ namespace NightPages
             bool watching = Reactions.Watching && !(FaceReader.Present && FaceReader.LookingAway);
             teller.Tick(now, Mathf.Clamp01(Reactions.Level), watching);
             TickLadder(now);
+            TickMore(now);
 
             // The monster's leash: while it is in the house and close, the gauge fills.
             float dist = figure != null ? (figure.position - PlayerPos).magnitude : float.PositiveInfinity;
