@@ -64,7 +64,7 @@ namespace NightPages
             teller.OnUnfazed = (inc, streak) => UnfazedEarly(inc.label, streak);
             Log("difficulty: " + DifficultyNames[d] + ". Budget ×" + Budget[d].ToString("0.0#") + ", adaptation can take it from ×" + Floor[d].ToString("0.0#") + " to ×" +
                 Ceil[d].ToString("0.0#") + ", calm and shrugged-off frights raise it ×" + Calm[d].ToString("0.0#") + ", rests " + RestMin[d].ToString("0") + "-" +
-                RestMax[d].ToString("0") + " s, full strength from day " + RampTo[d] + ", " + CluesNeeded + " clues to open the cellar");
+                RestMax[d].ToString("0") + " s, full strength from day " + RampTo[d] + ", " + DeductionsNeeded + " deduction" + (DeductionsNeeded == 1 ? "" : "s") + " for the deeper endings");
         }
 
         // ---------------------------------------------------------------- the figure's ladder

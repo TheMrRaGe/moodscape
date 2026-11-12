@@ -108,7 +108,8 @@ namespace NightPages
                 milk.Body.MoveRotation(Quaternion.Euler(0f, 0f, 92f) * milk.transform.rotation);
                 milk.transform.rotation = Quaternion.Euler(0f, 0f, 92f) * milk.transform.rotation;
                 yield return Settle(1.5f);
-                Log("mess stills: milk bottle after: tilt " + Vector3.Angle(milk.transform.up, Vector3.up).ToString("0") + ", holds " + (inMilk != null ? inMilk.litres.ToString("0.00") : "-") + ", at " + milk.transform.position.ToString("F2"));
+                if (milk == null) Log("mess stills: the milk bottle rolled off the table and broke (its spill still counts)");
+                else Log("mess stills: milk bottle after: tilt " + Vector3.Angle(milk.transform.up, Vector3.up).ToString("0") + ", holds " + (inMilk != null ? inMilk.litres.ToString("0.00") : "-") + ", at " + milk.transform.position.ToString("F2"));
                 bool spilt = false;
                 foreach (var p in Puddle.All) if (p != null && p.kind == "milk") spilt = true;
                 if (!spilt) Problem("liquids: the milk bottle on its side didn't spill");

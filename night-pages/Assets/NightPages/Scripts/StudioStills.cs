@@ -43,6 +43,7 @@ namespace NightPages
                 player.frozen = true;
                 hud.fade = hud.fadeTarget = 0f;
                 yield return MenuChecks(summary);
+                yield return ClueChecks(summary);
                 if (StudioCensus) yield return StoryCensus(summary);
                 if (StudioMess) yield return MessStills(summary);
                 else yield return HouseStills(summary);

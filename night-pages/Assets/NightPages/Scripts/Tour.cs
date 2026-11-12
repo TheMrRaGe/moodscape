@@ -1004,6 +1004,7 @@ namespace NightPages
                             if (brave)
                             {
                                 foreach (var n in notes) if (!n.read) ReadNote(n);
+                                BotClues();
                                 hud.modal = Modal.None;
                                 player.frozen = false;
                                 if (day >= 6) UseCellar();

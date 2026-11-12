@@ -6,7 +6,7 @@ using UnityEngine.InputSystem.Controls;
 
 namespace NightPages
 {
-    public enum Btn { Interact, One, Two, Three, Pause, Mind, Scared, Amused, SkipAhead, Restart, Sprint, Voice, Face, Flashlight, Work, Watch, Mark, Throw, Turn }
+    public enum Btn { Interact, One, Two, Three, Pause, Mind, Scared, Amused, SkipAhead, Restart, Sprint, Voice, Face, Flashlight, Work, Watch, Mark, Throw, Turn, Board }
 
     /// <summary>
     /// All input goes through here, so the game runs whether the project uses Unity's old Input Manager,
@@ -45,6 +45,7 @@ namespace NightPages
                 case Btn.Flashlight: return k.qKey;
                 case Btn.Watch: return k.tabKey;
                 case Btn.Mark: return k.f8Key;
+                case Btn.Board: return k.bKey;
             }
             return null;
         }
@@ -110,6 +111,7 @@ namespace NightPages
                 case Btn.Turn: return KeyCode.Mouse2;
                 case Btn.Watch: return KeyCode.Tab;
                 case Btn.Mark: return KeyCode.F8;
+                case Btn.Board: return KeyCode.B;
             }
             return KeyCode.None;
         }

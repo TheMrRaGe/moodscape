@@ -60,8 +60,6 @@ namespace NightPages
         public Tale tale;
         /// <summary>Long stays: the older stories under this one (one for a fortnight, two for a month), oldest last.</summary>
         public readonly List<Tale> older = new List<Tale>();
-        /// <summary>Clues needed before the deeper endings open: by difficulty (2, 3, 3, 4), one fewer in a short stay (never under 2).</summary>
-        public static int CluesNeeded { get { int n = new[] { 2, 3, 3, 4 }[Level]; return Mathf.Max(2, RunDays <= 3 ? n - 1 : n); } }
         /// <summary>The "ghosts only" option: limit what can really be going on to the supernatural.</summary>
         public static bool GhostsOnly { get { return Settings.S.ghostsOnly; } }
         /// <summary>Hardcore: not getting out of a dream sends you back to day one. (See Difficulty.cs for the four levels.)</summary>
@@ -408,6 +406,8 @@ namespace NightPages
             LogBible();
             haunt.SetTale(tale);
             ApplyLook();
+            found.Clear(); deduced.Clear(); deducedWrong.Clear();
+            HideClues();
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
             StartCoroutine(BeginDay(1));
@@ -461,6 +461,7 @@ namespace NightPages
             if (calendar == 1) hud.Say(job.Intro, 5f);
             if (calendar > 1 && !string.IsNullOrEmpty(fear.lastLine)) hud.Say("You wake with the dream still in the room.", 3.5f);
             if (LastDay) hud.Say("Your coat is on the hook by the front door. You could just go.", 5f);
+            UpdateBoard();
             WriteDiary();
             yield return new WaitForSeconds(0.4f);
             hud.fadeSpeed = 0.8f;
@@ -624,7 +625,7 @@ namespace NightPages
 
         void UseCellar()
         {
-            if (day >= 6 && clues >= CluesNeeded && !cellarOpened)
+            if (day >= 6 && deduced.Count >= 1 && !cellarOpened)
             {
                 cellarOpened = true;
                 Sfx.At("unlock", house.cellar.transform.position, 0.8f);
@@ -698,19 +699,13 @@ namespace NightPages
             for (int c = 1; c <= RunDays; c++) sb.Append(c > 1 ? ", " : "").Append(c).Append(">").Append(StoryDay(c));
             Log(sb.ToString() + " (real day > story day)");
             if (older.Count > 0) Log("story bible: the older stor" + (older.Count > 1 ? "ies surface" : "y surfaces") + " from story day 3, in the clues and the dream's pages");
-            Log("story bible: endings need " + CluesNeeded + " clues; the last word will be: " + (tale.Epilogue ?? "(none)"));
+            Log("story bible: endings need " + DeductionsNeeded + " deduction" + (DeductionsNeeded == 1 ? "" : "s") + " from the hidden papers; the last word will be: " + (tale.Epilogue ?? "(none)"));
         }
 
         void SpawnClue()
         {
-            // Today's note: the story's and the truth's, taking turns (the story's first: it's how the house introduces itself).
-            var taleClues = tale != null ? tale.Clues() : new List<string>();
-            var all = new List<string>();
-            for (int i = 0; i < Mathf.Max(taleClues.Count, ClueTexts[(int)truth].Length); i++)
-            {
-                if (i < taleClues.Count) all.Add(taleClues[i]);
-                if (i < ClueTexts[(int)truth].Length) all.Add(ClueTexts[(int)truth][i]);
-            }
+            // Today's note: the story's own (the truth's papers are hidden in the house instead: see Clues.cs).
+            var all = tale != null ? tale.Clues() : new List<string>();
             // The older stories' notes come after this one's (they surface once this story is under way).
             foreach (var o in older) all.AddRange(o.Clues());
             if (day < 2 || cluesSpawned >= all.Count) return;
@@ -760,9 +755,11 @@ namespace NightPages
             if (how == "leave")
             {
                 id = 5; title = "UNFINISHED";
-                text = job.Leave + "\n\nThe house watches you to the end of the road. It will keep.";
+                text = job.Leave + (truth == Truth.House && Knows("before")
+                    ? "\n\nYou know what it is now, and that it was here before the house was. You don't look back. It doesn't need you to."
+                    : "\n\nThe house watches you to the end of the road. It will keep.");
             }
-            else if (truth == Truth.Killer && grip >= 0.45f && clues >= CluesNeeded && faced)
+            else if (truth == Truth.Killer && grip >= 0.45f && deduced.Count >= DeductionsNeeded && faced)
             {
                 id = 0; title = "CONFESSION";
                 text = job.Confession;
@@ -772,7 +769,7 @@ namespace NightPages
                 id = 1; title = "THE GENTLER STORY";
                 text = job.Gentler + "\n\nIt was a good house. Anyone would have said so.\n\nIn the morning you make coffee. Two cups.";
             }
-            else if (truth == Truth.Keepers && clues >= CluesNeeded && faced)
+            else if (truth == Truth.Keepers && deduced.Count >= DeductionsNeeded && faced)
             {
                 id = 2; title = "REUNION";
                 text = "You go down the cellar stairs with a hammer.\n\nUnder the concrete, they have been waiting twenty years to be called by name. You say both names.";
@@ -796,7 +793,7 @@ namespace NightPages
             PlayerPrefs.SetInt("np_lastending", id);
             Diary.Burn();
             PlayerPrefs.Save();
-            Log("ending: " + title + " (truth " + truth + ", grip " + grip.ToString("0.00") + ", clues " + clues +
+            Log("ending: " + title + " (truth " + truth + ", grip " + grip.ToString("0.00") + ", clues " + clues + ", deductions " + deduced.Count + " (" + string.Join(", ", deduced.ToArray()) + ")" + (deducedWrong.Count > 0 ? ", written wrong " + deducedWrong.Count : "") +
                 ", faced " + tagFace + " / looked away " + tagAway + " / blamed " + tagBlame + ")");
             hud.header = title;
             string last = tale != null ? tale.Epilogue : null;
@@ -829,6 +826,7 @@ namespace NightPages
             }
 
             if (In.Down(Btn.Pause) && CanPause) OpenPause();
+            if (In.Down(Btn.Board) && CanPause && phase != Phase.Dream) OpenBoard();
 
             switch (hud.modal)
             {

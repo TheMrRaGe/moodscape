@@ -447,6 +447,7 @@ namespace NightPages
                 tagFace = tagFace, tagAway = tagAway, tagBlame = tagBlame, dreamDeaths = dreamDeaths, cellarOpened = cellarOpened,
                 rungOpen = rungOpen, rungShown = rungShown, rungDay = (int[])rungDay.Clone(),
                 who = hero.Copy(), tale = Diary.Of(tale), written = script.Export(),
+                found = new List<string>(found), deduced = new List<string>(deduced), deducedWrong = new List<string>(deducedWrong),
             };
             foreach (var o in older) d.older.Add(Diary.Of(o));
             d.Write();
@@ -468,7 +469,7 @@ namespace NightPages
             grip = d.grip;
             tagFace = d.tagFace; tagAway = d.tagAway; tagBlame = d.tagBlame;
             clues = d.clues;
-            cluesSpawned = d.clues;             // notes left but never read are left again
+            cluesSpawned = Mathf.Max(0, d.clues - (d.found != null ? d.found.Count : 0));     // the story's notes left but never read are left again
             dreamDeaths = d.dreamDeaths;
             cellarOpened = d.cellarOpened;
             sawCellarFloor = false;
@@ -494,6 +495,11 @@ namespace NightPages
             LogBible();
             haunt.SetTale(tale);
             ApplyLook();
+            found.Clear(); deduced.Clear(); deducedWrong.Clear();
+            if (d.found != null) found.AddRange(d.found);
+            if (d.deduced != null) deduced.AddRange(d.deduced);
+            if (d.deducedWrong != null) deducedWrong.AddRange(d.deducedWrong);
+            HideClues();
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
             StartCoroutine(BeginDay(d.calendar));

@@ -63,6 +63,7 @@ namespace NightPages
         public bool cellarOpened;
         public int rungOpen, rungShown;
         public int[] rungDay = new int[6];
+        public List<string> found = new List<string>(), deduced = new List<string>(), deducedWrong = new List<string>();
         public Character who = new Character();
         public TaleSave tale = new TaleSave();
         public List<TaleSave> older = new List<TaleSave>();
